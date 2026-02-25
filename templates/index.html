@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Syllable Stress Evaluator</title>
+  <link rel="icon" href="/static/favicon.ico" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.min.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>Syllable Stress Evaluator</h1>
+
+    <section class="card controls">
+      <div class="selection-row">
+        <div class="paragraph-label">Read this paragraph:</div>
+        <div id="paragraphOptions" class="paragraph-options" role="radiogroup" aria-label="Paragraph"></div>
+      </div>
+
+      <div id="paragraphText" class="paragraph"></div>
+
+      <div class="actions-row">
+        <button id="recordBtn" class="btn-record">Start Recording</button>
+        <button id="submitBtn" disabled>Submit for Analysis</button>
+        <span id="recordStatus">Not recording.</span>
+        <audio id="recordingPlayback" controls hidden></audio>
+      </div>
+    </section>
+
+    <section class="card" id="resultsSection" hidden>
+      <h2>Results</h2>
+      <p id="scoreSummary"></p>
+      <div id="renderedParagraph" class="paragraph render"></div>
+
+      <table id="targetsTable">
+        <thead>
+          <tr>
+            <th>Word</th><th>N/V</th><th>Expected</th><th>Inferred</th><th>Core Durations</th><th>Status</th><th>Feedback</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section class="card docs">
+      <h2>Developer / A2A</h2>
+      <ul>
+        <li>Agent Card URL: <a id="agentCardLink" href="/.well-known/agent-card.json"><code>/.well-known/agent-card.json</code></a></li>
+        <li>A2A JSON-RPC endpoint: <code>/a2a</code></li>
+        <li>Health endpoint: <code>/healthz</code></li>
+        <li>request_id: <code id="docsRequestId">-</code></li>
+      </ul>
+      <h3>Example request: pronunciation.evaluate</h3>
+      <pre>{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "pronunciation.evaluate",
+  "params": {
+    "paragraph_id": 1,
+    "audio_wav_base64": "BASE64_16KHZ_MONO_WAV",
+    "client_metadata": {"source": "demo"}
+  }
+}</pre>
+      <h3>Example response</h3>
+      <pre>{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": {
+    "request_id": "...",
+    "analysis": {
+      "deepgram_words": [],
+      "alignment": [],
+      "targets": [],
+      "score_summary": {}
+    }
+  }
+}</pre>
+      <h3>Example curl</h3>
+      <pre>curl -X POST "$BASE_URL/a2a" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"agent.about","params":{}}'</pre>
+    </section>
+  </main>
+
+  <script src="/static/script.min.js"></script>
+</body>
+</html>

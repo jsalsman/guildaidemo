@@ -1,0 +1,234 @@
+[These instructions have been completed, but the app still needs to be debugged.]
+
+Build a single-page, microphone-enabled EFL pronunciation evaluation web application focused on syllable stress for noun/verb stress-shift pairs, AND expose an A2A-compatible “remote agent” interface (discovery + JSON-RPC) that lets other agents call this service programmatically.
+
+The app must:
+
+- Let a learner choose 1 of 5 paragraphs stored in `5-paragraph-syllable-stress-test_NV.txt`.
+- Paragraphs contain target words annotated with `[N]` or `[V]` (only two-syllable words are annotated).
+- Record the learner reading the selected paragraph using WebRTC microphone input.
+- Record WAV in-browser at exactly: 16,000 Hz sample rate, 16-bit PCM, mono; produce a valid `audio/wav` file containing linear PCM (L16).
+- Upload the WAV bytes to a Python Flask backend for analysis.
+- Use Deepgram STT to obtain word endpoints and confidence scores using: model `nova-2`, language `en-US`, punctuation disabled, diarization disabled.
+- Tolerate deviations: do NOT assume the spoken output matches the paragraph text. Implement robust “inexact matching” between Deepgram words and the paragraph tokens; sometimes the match will be poor.
+
+The primary deliverable is an MVP with a strong, clear results UI. No accounts, no persistence, no storage. One web page only. Web app and A2A integration only.
+
+You MUST incorporate and adapt the reference logic from `score_server.py` in a meaningful way:
+- Reuse the Deepgram transcription call structure and parsing style that produces a flat list of word timing objects `{word, start, end, confidence}`.
+- Reuse the per-word audio segmentation approach: trim each word’s audio from the recording using Deepgram timings, add small padding, ensure 16kHz mono, and pass segments to the aligner.
+- Reuse the PocketSphinx forced-alignment approach that yields phoneme segments with timestamps per phoneme.
+- Reuse the pronunciation/phoneme matching approach (best pronunciation selection via phoneme match score) as the basis for identifying syllable core vowels.
+- REQUIRED VISUAL FEATURE: compute `confidence_cubed = confidence ** 3` for each Deepgram word and use it to drive word BACKGROUND coloring in the UI. Confidence must ONLY be represented as background coloring (no waveforms, no timing bars).
+
+Add operational basics:
+- Every request must have a request/trace ID.
+  - If header `X-Request-Id` is provided, use it; otherwise generate a UUID.
+  - Include the request_id in:
+    - JSON responses,
+    - server logs,
+    - and in the rendered web page results.
+- Provide `GET /healthz` that returns JSON `{status:"ok"}` and includes request_id if present.
+
+A2A remote agent interface (required)
+Expose:
+1) Agent discovery card:
+- `GET /.well-known/agent-card.json` returns a JSON “Agent Card” describing this service as an A2A-compatible remote agent, including:
+  - `name`, `description`, `version`, `protocolVersion`,
+  - `url` (base URL of this service),
+  - `skills`: at least one skill describing pronunciation evaluation for syllable stress from audio + paragraph,
+  - `defaultInputModes` (e.g., ["audio/wav","application/json"]),
+  - `defaultOutputModes` (e.g., ["application/json"]).
+- Keep the Agent Card simple, stable, and human-readable.
+
+2) A2A JSON-RPC endpoint:
+- `POST /a2a` accepts JSON-RPC 2.0 requests and returns JSON-RPC 2.0 responses.
+- Implement at least these methods:
+  - `agent.about` -> returns basic info (same as Agent Card summary) + request_id.
+  - `pronunciation.evaluate` -> evaluates audio against a paragraph and returns the same core analysis payload as the web flow.
+- `pronunciation.evaluate` params:
+  - `paragraph_id` (1..5) OR `paragraph_text` (optional override)
+  - `audio_wav_base64` (base64-encoded 16kHz 16-bit PCM mono WAV bytes)
+  - optional: `client_metadata` object (freeform)
+- The JSON-RPC result must include:
+  - `request_id`
+  - `analysis` (same structure used by `/api/analyze`)
+- The web page MUST visibly document these endpoints and example payloads so they can be demoed:
+  - show the Agent Card URL
+  - show example JSON-RPC request/response for `pronunciation.evaluate`
+  - show a curl example
+
+Core algorithm requirements
+
+A) Paragraph parsing and targets
+- Parse `5-paragraph-syllable-stress-test_NV.txt` into 5 paragraph items.
+- Each paragraph has tokens that may include markers like `record[N]` or `record[V]`.
+- Create:
+  1) a “display paragraph” with markers removed (for the user to read),
+  2) a structured target list: `[{token_index, word, label}]` where label is N or V.
+- Only the annotated words need stress evaluation; treat all annotated words as two-syllable.
+
+B) Deepgram transcription (robust/inexact matching)
+- Call Deepgram with:
+  - model: `nova-2`
+  - language: `en-US`
+  - punctuation: disabled
+  - diarization: disabled
+- Parse to a flat array `deepgram_words` with:
+  `{idx, word, start, end, confidence, confidence_cubed}`
+- Normalize words for matching by: lowercase + strip punctuation/apostrophes + collapse whitespace.
+
+C) Inexact alignment of Deepgram words to paragraph tokens
+Because the learner may deviate from the prompt, implement robust mapping:
+- Tokenize the display paragraph into normalized tokens.
+- Tokenize Deepgram output words into normalized tokens.
+- Use a simple sequence alignment / dynamic programming approach (edit distance / Needleman–Wunsch style) to align the two token sequences with insertions/deletions/substitutions.
+- Produce a mapping from paragraph token indices -> deepgram word indices when possible.
+- For each annotated target token, attempt to find a mapped Deepgram word index. If not found, mark as “missing” (no score, but report).
+
+D) Stress scoring definition (voiced-core duration only)
+Stress is determined by duration of each syllable’s VOICED CORE phoneme (vowel or diphthong), not total syllable duration.
+- Provide an explicit list of CMUbet vowel/diphthong phonemes (AA, AE, AH, AO, AW, AY, EH, ER, EY, IH, IY, OW, OY, UH, UW) and handle stress-numbered variants (e.g., EH1, ER0).
+For each annotated two-syllable word:
+- Determine syllable1 core vowel phoneme and syllable2 core vowel phoneme.
+- Compute each core duration from PocketSphinx phoneme alignment:
+  `duration = phoneme_end - phoneme_start` for the core vowel phoneme in that syllable.
+- Inferred stress:
+  - if core1 > core2 -> stress 1
+  - else -> stress 2
+- Expected stress:
+  - `[N]` => stress 1
+  - `[V]` => stress 2
+- If either core vowel phoneme cannot be found/aligned, mark “unaligned” and exclude from score denominator (but still show in UI).
+
+E) Syllabification for targets (simple, deterministic, two-syllable only)
+Make syllabification reliable for all annotated words:
+- Include an in-repo mapping file `target_words_2syll_cores.json` containing entries for all annotated base words, each with:
+  - one or more pronunciation variants (CMU phones list),
+  - core vowel phoneme for syllable 1 and syllable 2.
+- At runtime:
+  - Use PocketSphinx aligned phoneme sequence for that word segment.
+  - Choose the best matching variant by phoneme overlap score (as in the reference approach).
+  - Locate the core vowels in the aligned phoneme list and extract their durations.
+
+Backend requirements (Flask)
+
+1) Routes
+- GET `/`
+  - Serve ONE HTML page with embedded JS/CSS (or static files) implementing the entire UI + developer docs section.
+- GET `/api/paragraphs`
+  - Returns JSON:
+    - `request_id`
+    - `paragraphs`: [{id, display_text, tokens, targets}]
+- POST `/api/analyze`
+  - Accept multipart form:
+    - `paragraph_id`
+    - `audio_wav` file upload (16kHz, 16-bit PCM, mono WAV)
+  - Return JSON:
+    - `request_id`
+    - `deepgram_words`: array of `{idx, word, start, end, confidence, confidence_cubed}`
+    - `alignment`: mapping between paragraph token indices and Deepgram word indices
+    - `targets`: per-target results:
+      {
+        "word": "...",
+        "label": "N"|"V",
+        "expected_stress": 1|2,
+        "inferred_stress": 1|2|null,
+        "correct": true|false|null,
+        "status": "ok"|"missing"|"unaligned",
+        "core_durations": {"syll1": float|null, "syll2": float|null},
+        "core_phones": {"syll1": "EH1"|null, "syll2": "ER0"|null},
+        "deepgram_word_index": int|null,
+        "deepgram_confidence": float|null,
+        "deepgram_confidence_cubed": float|null,
+        "feedback": "short actionable text"
+      }
+    - `score_summary`: {percent_correct, total_targets, scored_targets, missing_targets, unaligned_targets}
+    - `render_words`: list of word spans for rendering the paragraph with background coloring:
+      [{text, is_space, deepgram_idx, confidence_cubed, bg_norm, is_target, target_status, target_correct}]
+- GET `/healthz`
+  - Return JSON `{request_id, status:"ok"}` (request_id may be generated or passed in).
+- GET `/.well-known/agent-card.json`
+  - Return Agent Card JSON with request_id included as an extra field.
+- POST `/a2a`
+  - JSON-RPC 2.0 endpoint; include request_id in result or error payload.
+
+2) Audio handling constraints
+- Prefer in-memory processing:
+  - Avoid writing temp files.
+  - Use `io.BytesIO` for WAV bytes and in-memory slicing.
+- If PocketSphinx forces file paths, use NamedTemporaryFile as last resort; always delete before responding.
+
+3) Deepgram key and config
+- Make sure the `DEEPGRAM_API_KEY` environment variable is set.
+- Never commit secrets.
+
+Frontend requirements (single page)
+
+Recording requirements:
+- Use `getUserMedia({audio:{channelCount:1, sampleRate:16000, sampleSize:16, echoCancellation:true, noiseSuppression:true, autoGainControl:true}})`.
+- Implement a WAV encoder in JS to ensure the uploaded audio is 16kHz 16-bit PCM mono WAV.
+- Buttons: Start/Stop (one button, Start=green/Stop=red showing recording in progress) and Submit.
+- Enforce a max recording length (e.g., 120s).
+
+UI requirements:
+- Paragraph selector (1–5).
+- Show the display paragraph (markers removed) for the user to read.
+- After analysis:
+  1) Render the paragraph as word spans with BACKGROUND coloring based on confidence_cubed (subtle shade/opacity).
+  2) Stress errors must be highly prominent:
+     - Any target word with wrong stress must be surrounded by a bright red, thick rectangle (e.g., outline: 4px solid red; border radius).
+     - Missing/unaligned targets use a distinct style (e.g., dashed orange border).
+  3) Per-target table with:
+     - word, N/V, expected stress, inferred stress, core durations, status, feedback, and a play button to review the recorded audio.
+     - Confidence is only represented by the background coloring and/or a small colored chip derived from confidence_cubed (no numeric confidence display required unless you prefer it).
+- Include a “Developer / A2A” section on the SAME page that shows:
+  - Agent Card URL: `/.well-known/agent-card.json`
+  - A2A endpoint: `/a2a`
+  - Example JSON-RPC `pronunciation.evaluate` request/response (with base64 placeholder)
+  - Example curl commands
+  - Health endpoint `/healthz`
+
+Cloud Run readiness
+- Include:
+  - `requirements.txt` edited as neccessary to support the app,
+  - `Procfile` as provided,
+  - `devserver.sh` as provided, with which you can start and test the app. Note how it minimizes `script.js` and `styles.css` to `static/`,
+  - your new `app.py` exposing the flask app from the provided `main.py` for development via `devserver.sh` or production gunicorn via `Procfile`,
+  - your new `templates/index.html` for the single-page app and A2P documentation, and
+  - Clear instructions in README for local run and Cloud Run deploy (high-level, no secrets).
+- No persistence; no file, database, or object storage required.
+
+Project layout (recommended)
+- `app.py` (Flask app + routes + request_id middleware + pronunciation constants for the 69 tagged target words of the five paragraphs + Deepgram client + PocketSphinx alignment + wav tools + word sequence alignment + scoring routines for output to `index.html` template after submission)
+- `templates/index.html` (single page template + JS + CSS)
+- `5-paragraph-syllable-stress-test_NV.txt` (encoded data as described above)
+- `a2a-jsonrpc.py` (JSON-RPC parser/handler and agent_card endpoint)`
+- `README.md`
+- `requirements.txt`
+
+Testing (minimal MVP)
+- Unit test paragraph parsing + target extraction.
+- Unit test token alignment on a small synthetic example.
+- Unit test confidence_cubed computation + deterministic background normalization.
+- Since you can't test microphone submission of mocked learner audio, provide instructions in `README.md` for the final validation test:
+  - select paragraph → record → analyze → see confidence-colored transcript and prominent stress error boxes, and see visible A2A documentation on the same page.
+
+The repo must run locally with the `devserver.sh` provided; once it does we will set up the `cloudbuild.yaml` manually for production deployment.
+
+---
+
+Clarification update (approved): frontend source files should be maintained in `script.js` and `styles.css`; `devserver.sh` minifies them into `static/script.min.js` and `static/styles.min.css`; `templates/index.html` should reference those minified static files (not inline-only JS/CSS).
+
+Approved unified task proposal summary:
+1) Keep `main.py` as-is and implement all new app behavior in `app.py`.
+2) Build required Flask routes (`/`, `/api/paragraphs`, `/api/analyze`, `/healthz`, `/.well-known/agent-card.json`, `/a2a`) with request_id handling and logging.
+3) Parse paragraph file, extract targets, and apply hardcoded expected stress by label (`N`=>1, `V`=>2).
+4) Reuse/adapt `score_server.py` patterns for Deepgram flat word extraction, per-word audio slicing/padding, PocketSphinx alignment, and best-pronunciation matching by phoneme overlap.
+5) Implement robust inexact token alignment (Needleman–Wunsch/edit-distance style) between paragraph tokens and Deepgram words.
+6) Implement confidence-cubed UI background coloring, prominent stress error highlighting, missing/unaligned styles, and per-target results table.
+7) Keep frontend source in `script.js`/`styles.css`; serve one page via `templates/index.html` referencing minified static assets.
+8) Add same-page developer docs for Agent Card + A2A JSON-RPC examples and curl snippets.
+9) Update `requirements.txt`, add `.env.example`, and update README with local/devserver + manual validation + high-level Cloud Run notes.
+10) Add pytest unit tests for parsing/targets, alignment, and confidence/background normalization.
+11) Run checks/tests, take a screenshot of the frontend change if possible, commit, and create a PR message via tool.

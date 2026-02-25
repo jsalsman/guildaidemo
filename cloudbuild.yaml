@@ -1,0 +1,106 @@
+steps:
+  - name: python:3.13.9-slim
+    id: Smoketests
+    entrypoint: bash
+    args:
+      - -ceu
+      - |
+        # Fail on errors, showing commands attempted
+        set -euxo pipefail
+
+        echo 'Compiling all Python Files'
+        python -m compileall . -q
+
+        echo 'Creating .venv and installing dependencies'
+        python -m venv .venv
+        . .venv/bin/activate
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+        echo 'Minifying static assets'
+        python -m rjsmin < script.js > static/script.min.js
+        python -m rcssmin < styles.css > static/styles.min.css
+
+        echo 'Validating Jinja2 templates'
+        python -c '
+        import sys
+        from jinja2 import Environment, FileSystemLoader
+        env = Environment(loader=FileSystemLoader("./templates"))
+        for template in env.list_templates():
+            try:
+                env.get_template(template)  # compiles, validating syntax
+            except Exception as e:
+                print(f"Syntax error in {template}: {e}")
+                sys.exit(1)'
+
+        echo 'Starting dev server'
+        ./devserver.sh &
+        server_pid=$!
+        trap "kill $server_pid || true" EXIT
+
+        echo 'Installing curl to test server; also allows it time to start'
+        apt-get update > /dev/null
+        apt-get install -y curl > /dev/null
+
+        echo 'Making sure dev server responds with expected content'
+        curl -sS http://localhost:8080 > /tmp/response.html
+        if grep -q "Example curl" /tmp/response.html ; then
+          echo "Smoke test passed: expected content found in response."
+          exit 0
+        fi
+
+        echo 'Head and tail of bad response:'
+        head /tmp/response.html
+        tail /tmp/response.html
+
+        echo 'Smoke test failed: dev server did not serve expected content.'
+        exit 1
+  - name: gcr.io/k8s-skaffold/pack
+    args:
+      - build
+      - >-
+        $_AR_HOSTNAME/$_AR_PROJECT_ID/$_AR_REPOSITORY/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
+      - '--builder=gcr.io/buildpacks/builder:latest'
+      - '--network=cloudbuild'
+      - '--path=.'
+    id: Buildpack
+    entrypoint: pack
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - >-
+        $_AR_HOSTNAME/$_AR_PROJECT_ID/$_AR_REPOSITORY/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
+    id: Push
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+    args:
+      - run
+      - services
+      - update
+      - $_SERVICE_NAME
+      - '--platform=managed'
+      - >-
+        --image=$_AR_HOSTNAME/$_AR_PROJECT_ID/$_AR_REPOSITORY/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
+      - >-
+        --labels=managed-by=gcp-cloud-build-deploy-cloud-run,commit-sha=$COMMIT_SHA,gcb-build-id=$BUILD_ID,gcb-trigger-id=$_TRIGGER_ID
+      - '--region=$_DEPLOY_REGION'
+      - '--quiet'
+    id: Deploy
+    entrypoint: gcloud
+images:
+  - >-
+    $_AR_HOSTNAME/$_AR_PROJECT_ID/$_AR_REPOSITORY/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA
+options:
+  substitutionOption: ALLOW_LOOSE
+  logging: CLOUD_LOGGING_ONLY
+substitutions:
+  _AR_REPOSITORY: cloud-run-source-deploy
+  _AR_PROJECT_ID: virtual-indexer-344822
+  _PLATFORM: managed
+  _SERVICE_NAME: sylable-stress
+  _TRIGGER_ID: 4c0e7df9-55ad-4172-b28c-b9b77b04507b
+  _DEPLOY_REGION: us-west1
+  _AR_HOSTNAME: us-west1-docker.pkg.dev
+tags:
+  - gcp-cloud-build-deploy-cloud-run
+  - gcp-cloud-build-deploy-cloud-run-managed
+  - sylable-stress

@@ -1,0 +1,10 @@
+flask
+python-dotenv
+requests
+rcssmin
+rjsmin
+gunicorn
+gevent
+pocketsphinx
+pytest
+cmudict
