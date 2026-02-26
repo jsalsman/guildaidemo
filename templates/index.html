@@ -134,6 +134,32 @@
     </section>
   </main>
 
+  <div id="analysisOverlay" class="analysis-overlay" aria-live="polite" aria-label="Analysis in progress" aria-hidden="true">
+    <img src="/static/loading.gif" alt="Analyzing submission" width="100" height="100" />
+  </div>
+
   <script src="/static/script.min.js"></script>
+
+  <style>
+    .analysis-overlay {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.4);
+      z-index: 2000;
+      pointer-events: all;
+    }
+
+    .analysis-overlay.is-visible {
+      display: flex;
+    }
+
+    .analysis-overlay img {
+      width: 100px;
+      height: 100px;
+    }
+  </style>
 </body>
 </html>
