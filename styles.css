@@ -180,3 +180,68 @@ pre {
 .docs h2 {
     margin-top: 0;
 }
+
+.github-corner {
+  position: fixed;
+  top: 0;
+  right: 0;
+  z-index: 1000;
+  width: 200px;
+  height: 200px;
+  pointer-events: none;
+}
+
+.github-corner a {
+  position: absolute;
+  top: 34px;
+  right: -54px;
+  width: 240px;
+  padding: 10px 0;
+  background: #111;
+  color: #fff;
+  text-align: center;
+  text-decoration: none;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  transform: rotate(45deg);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+}
+
+.github-corner a:hover {
+  background: #1f4aa8;
+}
+
+@media (max-width: 700px) {
+  .github-corner {
+    width: 150px;
+    height: 150px;
+  }
+
+  .github-corner a {
+    top: 26px;
+    right: -58px;
+    width: 210px;
+    font-size: 13px;
+  }
+}
+
+.analysis-overlay {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.4);
+  z-index: 2000;
+  pointer-events: all;
+}
+
+.analysis-overlay.is-visible {
+  display: flex;
+}
+
+.analysis-overlay img {
+  width: 100px;
+  height: 100px;
+}
