@@ -23,6 +23,7 @@ const targetsTableBody = document.querySelector('#targetsTable tbody');
 const scoreSummary = document.getElementById('scoreSummary');
 const recordingPlayback = document.getElementById('recordingPlayback');
 const docsRequestIdEl = document.getElementById('docsRequestId');
+const analysisOverlay = document.getElementById('analysisOverlay');
 
 function to16BitPCM(float32Array) {
   const output = new Int16Array(float32Array.length);
@@ -170,6 +171,13 @@ function stopRecording() {
 }
 
 
+
+function setAnalysisOverlayVisible(isVisible) {
+  if (!analysisOverlay) return;
+  analysisOverlay.classList.toggle('is-visible', isVisible);
+  analysisOverlay.setAttribute('aria-hidden', String(!isVisible));
+}
+
 function formatDuration(value) {
   if (value == null) return '-';
   return Number(value).toFixed(2);
@@ -233,13 +241,21 @@ async function submitAnalysis() {
   const form = new FormData();
   form.append('paragraph_id', String(selectedParagraphId));
   form.append('audio_wav', recordingBlob, 'recording.wav');
-  const resp = await fetch('/api/analyze', { method: 'POST', body: form });
-  const data = await resp.json();
-  if (!resp.ok) {
-    alert(data.error || 'Analysis failed');
-    return;
+
+  setAnalysisOverlayVisible(true);
+  submitBtn.disabled = true;
+  try {
+    const resp = await fetch('/api/analyze', { method: 'POST', body: form });
+    const data = await resp.json();
+    if (!resp.ok) {
+      alert(data.error || 'Analysis failed');
+      return;
+    }
+    renderResults(data);
+  } finally {
+    setAnalysisOverlayVisible(false);
+    submitBtn.disabled = false;
   }
-  renderResults(data);
 }
 
 paragraphOptions.addEventListener('change', (e) => {
