@@ -35,7 +35,7 @@ steps:
 
         echo 'Starting dev server'
         chmod +x ./devserver.sh
-        ./devserver.sh &
+        DEEPGRAM_API_KEY=dummy ./devserver.sh &
         server_pid=$!
         trap "kill $server_pid || true" EXIT
 
