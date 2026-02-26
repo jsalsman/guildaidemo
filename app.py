@@ -1,3 +1,10 @@
+"""Flask application for evaluating noun/verb syllable stress from WAV audio.
+
+The service accepts paragraph context with marked target words and aligns ASR
+output and phone-level timing to infer whether stress was placed on syllable 1
+or syllable 2 for each target.
+"""
+
 import base64
 import io
 import json
@@ -32,11 +39,13 @@ _DECODER = None
 
 
 def log(message: str) -> None:
+    """Print request-scoped logs with a request id for easier traceability."""
     rid = getattr(g, "request_id", "-")
     print(f"[request_id={rid}] {message}", flush=True)
 
 
 def normalize_token(token: str) -> str:
+    """Normalize a token to alphanumerics for matching/alignment."""
     token = token.lower().strip()
     token = re.sub(r"['’]", "", token)
     token = re.sub(r"[^a-z0-9]+", "", token)
@@ -44,6 +53,7 @@ def normalize_token(token: str) -> str:
 
 
 def confidence_cubed(confidence: float | None) -> float | None:
+    """Re-weight confidence by cubing, emphasizing high-confidence words."""
     if confidence is None:
         return None
     c = max(0.0, min(1.0, float(confidence)))
@@ -51,12 +61,15 @@ def confidence_cubed(confidence: float | None) -> float | None:
 
 
 def normalize_bg(value: float | None) -> float:
+    """Clamp background intensity values to [0, 1] for rendering."""
     if value is None:
         return 0.0
     return max(0.0, min(1.0, value))
 
 
 def parse_paragraphs(text: str) -> list[dict[str, Any]]:
+    """Parse paragraphs and extract target annotations like word[N]/word[V]."""
+    # Paragraphs are separated by one or more blank lines.
     parts = [p.strip() for p in re.split(r"\n\s*\n", text.strip()) if p.strip()]
     paragraphs = []
     for i, p in enumerate(parts, start=1):
@@ -66,6 +79,7 @@ def parse_paragraphs(text: str) -> list[dict[str, Any]]:
         for idx, w in enumerate(words):
             m = re.match(r"^(.+?)\[([NV])\]([\.,;:!?]?)$", w)
             if m:
+                # Keep punctuation for display, but strip the label marker.
                 base = m.group(1)
                 label = m.group(2)
                 punct = m.group(3)
@@ -93,6 +107,7 @@ with open("5-paragraph-syllable-stress-test_NV.txt", "r", encoding="utf-8") as f
 
 
 def load_pronunciations() -> dict[str, list[list[str]]]:
+    """Load CMUdict pronunciations for only target words in test paragraphs."""
     pronunciations: dict[str, list[list[str]]] = {}
     entries = cmudict.dict()
     seen = set()
@@ -104,7 +119,9 @@ def load_pronunciations() -> dict[str, list[list[str]]]:
             seen.add(w)
             variants = []
             for phones in entries.get(w, []):
+                # Drop lexical stress digits for phone matching logic.
                 ph = [re.sub(r"\d", "", phone) for phone in phones]
+                # Keep only multi-syllable candidates (need at least two vowels).
                 if sum(1 for x in ph if x in VOWEL_BASES) >= 2:
                     variants.append(ph)
             if variants:
@@ -117,6 +134,7 @@ PRONUNCIATIONS = load_pronunciations()
 
 @dataclass
 class WavData:
+    """Simple container for decoded WAV metadata and PCM payload."""
     sample_rate: int
     channels: int
     sample_width: int
@@ -124,6 +142,7 @@ class WavData:
 
 
 def read_wav_bytes(wav_bytes: bytes) -> WavData:
+    """Decode WAV bytes and return audio properties plus raw PCM frames."""
     with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
         sr = wf.getframerate()
         channels = wf.getnchannels()
@@ -133,6 +152,7 @@ def read_wav_bytes(wav_bytes: bytes) -> WavData:
 
 
 def deepgram_transcribe(wav_bytes: bytes) -> list[dict[str, Any]]:
+    """Submit WAV to Deepgram and return flattened per-word metadata."""
     headers = {
         "Authorization": f"Token {DEEPGRAM_API_KEY}",
         "Content-Type": "audio/wav",
@@ -158,6 +178,7 @@ def deepgram_transcribe(wav_bytes: bytes) -> list[dict[str, Any]]:
 
 
 def needleman_wunsch_alignment(ref_tokens: list[str], hyp_tokens: list[str]) -> dict[int, int]:
+    """Globally align reference/hypothesis tokens and return exact-match mapping."""
     n, m = len(ref_tokens), len(hyp_tokens)
     dp = [[0] * (m + 1) for _ in range(n + 1)]
     bt = [[None] * (m + 1) for _ in range(n + 1)]
@@ -186,6 +207,7 @@ def needleman_wunsch_alignment(ref_tokens: list[str], hyp_tokens: list[str]) -> 
     while i > 0 or j > 0:
         step = bt[i][j]
         if step == "D":
+            # Only map aligned positions when the normalized tokens truly match.
             if i > 0 and j > 0 and ref_tokens[i - 1] == hyp_tokens[j - 1]:
                 mapping[i - 1] = j - 1
             i -= 1
@@ -198,6 +220,7 @@ def needleman_wunsch_alignment(ref_tokens: list[str], hyp_tokens: list[str]) -> 
 
 
 def _ensure_decoder():
+    """Lazily initialize and cache the PocketSphinx decoder instance."""
     global _DECODER
     if _DECODER is not None:
         return _DECODER
@@ -216,6 +239,7 @@ def _ensure_decoder():
 
 
 def slice_word_pcm(wav_data: WavData, start: float, end: float, total_duration: float) -> bytes:
+    """Extract a padded PCM slice for a word-level audio segment."""
     if wav_data.sample_rate != 16000 or wav_data.channels != 1 or wav_data.sample_width != 2:
         raise ValueError("Input audio must be 16kHz mono 16-bit PCM WAV")
 
@@ -228,6 +252,7 @@ def slice_word_pcm(wav_data: WavData, start: float, end: float, total_duration: 
 
 
 def align_phonemes(word_text: str, pcm_bytes: bytes, start_time: float) -> list[dict[str, Any]]:
+    """Run forced alignment for one word and return phone intervals in seconds."""
     decoder = _ensure_decoder()
     decoder.set_align_text(normalize_token(word_text) or word_text)
     decoder.start_utt()
@@ -252,12 +277,14 @@ def align_phonemes(word_text: str, pcm_bytes: bytes, start_time: float) -> list[
 
 
 def phoneme_match_score(aligned: list[dict[str, Any]], pronunciation: list[str]) -> int:
+    """Score phone sequence overlap by position-wise matches."""
     aligned_seq = [re.sub(r"\d", "", p["phone"]) for p in aligned]
     pron_seq = [re.sub(r"\d", "", x) for x in pronunciation]
     return sum(1 for i in range(min(len(aligned_seq), len(pron_seq))) if aligned_seq[i] == pron_seq[i])
 
 
 def infer_stress_from_word(word: str, aligned_phones: list[dict[str, Any]]) -> dict[str, Any]:
+    """Infer stress from aligned vowels by comparing first two vowel durations."""
     norm = normalize_token(word)
     variants = PRONUNCIATIONS.get(norm, [])
     if not variants or not aligned_phones:
@@ -295,6 +322,7 @@ def infer_stress_from_word(word: str, aligned_phones: list[dict[str, Any]]) -> d
 
     inferred = None
     if d1 is not None and d2 is not None:
+        # Simple duration heuristic: longer nucleus is treated as stressed.
         inferred = 1 if d1 >= d2 else 2
 
     return {
@@ -305,6 +333,7 @@ def infer_stress_from_word(word: str, aligned_phones: list[dict[str, Any]]) -> d
 
 
 def build_render_words(display_text: str, alignment: dict[int, int], deepgram_words: list[dict[str, Any]], targets: list[dict[str, Any]], target_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Create UI-ready token metadata while preserving original spacing."""
     target_by_idx = {t["token_index"]: t for t in targets}
     result_by_idx = {t["token_index"]: r for t, r in zip(targets, target_results)}
     render = []
@@ -331,6 +360,7 @@ def build_render_words(display_text: str, alignment: dict[int, int], deepgram_wo
 
 
 def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, Any]:
+    """End-to-end analysis pipeline for a paragraph and uploaded WAV audio."""
     deepgram_words = deepgram_transcribe(wav_bytes)
     ref_norm = [normalize_token(t) for t in paragraph["tokens"]]
     hyp_norm = [normalize_token(w["word"]) for w in deepgram_words]
@@ -341,6 +371,7 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, An
 
     targets_out = []
     for t in paragraph["targets"]:
+        # Start each target with a pessimistic default that is refined if aligned.
         mapped = alignment.get(t["token_index"])
         base = {
             "token_index": t["token_index"],
@@ -383,6 +414,7 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, An
             else:
                 base["feedback"] = "Could not infer stress; speak the target word more clearly."
         except Exception as exc:
+            # Keep analysis resilient: one target failure should not abort the batch.
             log(f"alignment failed for word={t['word']}: {exc}")
             base["feedback"] = "Alignment failed for this word segment."
 
@@ -412,37 +444,44 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, An
 
 
 def get_request_id() -> str:
+    """Use inbound request id when available; otherwise generate one."""
     header = request.headers.get("X-Request-Id", "").strip()
     return header or str(uuid.uuid4())
 
 
 @app.before_request
 def attach_request_id() -> None:
+    """Attach a request id to flask.g before each request is handled."""
     g.request_id = get_request_id()
 
 
 @app.after_request
 def add_request_id_header(resp: Response) -> Response:
+    """Mirror server request id in response headers for client correlation."""
     resp.headers["X-Request-Id"] = g.request_id
     return resp
 
 
 @app.route("/")
 def index() -> str:
+    """Serve the web UI."""
     return render_template("index.html")
 
 
 @app.route("/api/paragraphs")
 def api_paragraphs():
+    """Return all parsed practice paragraphs with target metadata."""
     return jsonify({"request_id": g.request_id, "paragraphs": PARAGRAPHS})
 
 
 @app.route("/healthz")
 def healthz():
+    """Lightweight health-check endpoint."""
     return jsonify({"request_id": g.request_id, "status": "ok"})
 
 
 def _agent_card() -> dict[str, Any]:
+    """Build static-ish A2A agent capability metadata."""
     base_url = request.host_url.rstrip("/")
     return {
         "name": "Syllable Stress Evaluator",
@@ -463,6 +502,7 @@ def _agent_card() -> dict[str, Any]:
 
 @app.route("/.well-known/agent-card.json")
 def agent_card():
+    """Expose A2A agent-card metadata at the well-known endpoint."""
     card = _agent_card()
     card["request_id"] = g.request_id
     return jsonify(card)
@@ -470,6 +510,7 @@ def agent_card():
 
 @app.route("/api/analyze", methods=["POST"])
 def api_analyze():
+    """Handle multipart form upload and return full stress analysis JSON."""
     paragraph_raw = request.form.get("paragraph_id", "0")
     try:
         paragraph_id = int(paragraph_raw)
@@ -494,12 +535,14 @@ def api_analyze():
 
 @app.route("/a2a", methods=["POST"])
 def a2a():
+    """JSON-RPC style endpoint for remote pronunciation evaluation."""
     rpc = request.get_json(silent=True) or {}
     rpc_id = rpc.get("id")
     method = rpc.get("method")
     params = rpc.get("params") or {}
 
     def rpc_err(code: int, message: str, status: int = 400):
+        """Return a JSON-RPC error object with request context."""
         return jsonify({"jsonrpc": "2.0", "id": rpc_id, "error": {"code": code, "message": message, "request_id": g.request_id}}), status
 
     if rpc.get("jsonrpc") != "2.0":
