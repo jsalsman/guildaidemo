@@ -94,17 +94,46 @@
   "jsonrpc": "2.0",
   "id": "p3-a2a-demo",
   "result": {
-    "request_id": "...",
+    "request_id": "b0f8f5b8-6f6d-4d73-bac2-89f8bf7e0f91",
     "analysis": {
-      "deepgram_words": [{"word": "record", "confidence": 0.97}],
-      "alignment": [{"ref_token": "record", "hyp_word": "record"}],
-      "targets": [{"word": "record", "status": "ok"}],
-      "score_summary": {"percent_correct": 100.0, "total_targets": 7}
+      "deepgram_words": [
+        {"word": "He", "start": 0.42, "end": 0.58, "confidence": 0.99},
+        {"word": "recorded", "start": 0.58, "end": 1.02, "confidence": 0.97},
+        {"word": "the", "start": 1.02, "end": 1.12, "confidence": 0.98},
+        {"word": "project", "start": 1.12, "end": 1.51, "confidence": 0.96}
+      ],
+      "alignment": [
+        {"ref_token": "recorded", "hyp_word": "recorded", "confidence": 0.97},
+        {"ref_token": "project", "hyp_word": "project", "confidence": 0.96}
+      ],
+      "targets": [
+        {
+          "word": "record",
+          "pos": "verb",
+          "expected": "re-CORD",
+          "inferred": "re-CORD",
+          "status": "ok",
+          "feedback": "Verb stress is correct."
+        },
+        {
+          "word": "project",
+          "pos": "noun",
+          "expected": "PRO-ject",
+          "inferred": "pro-JECT",
+          "status": "needs_work",
+          "feedback": "Noun should stress the first syllable."
+        }
+      ],
+      "score_summary": {
+        "percent_correct": 50.0,
+        "correct_targets": 1,
+        "total_targets": 2
+      }
     },
     "persistence": {
-      "recording_id": "YYMMDDHHMMSSffffff",
-      "wav_path": "/bucket/YYMMDDHHMMSSffffff.wav",
-      "json_path": "/bucket/YYMMDDHHMMSSffffff.json"
+      "recording_id": "250227114501123456",
+      "wav_path": "gs://syllable-stress/250227114501123456.wav",
+      "json_path": "gs://syllable-stress/250227114501123456.json"
     }
   }
 }</pre>
