@@ -67,7 +67,7 @@
     <section class="card docs">
       <h2>Developers: A2A usage</h2>
       <ul>
-        <li>Agent Card URL: <a id="agentCardLink" href="/.well-known/agent-card.json"><code>/.well-known/agent-card.json</code></a></li>
+        <li>Agent Card URL: <a id="agentCardLink" href="/.well-known/agent.json"><code>/.well-known/agent.json</code></a></li>
         <li>A2A JSON-RPC endpoint: <code>/a2a</code> (methods: <code>agent.about</code>, <code>paragraphs.count</code>, <code>paragraphs.get_text</code>, <code>pronunciation.evaluate</code>)</li>
         <li>Health endpoint: <code>/healthz</code></li>
         <li>request_id: <code id="docsRequestId">-</code></li>
@@ -154,7 +154,7 @@
 }</pre>
       <h3>Example curl: model card discovery</h3>
       <p>Run this command to retrieve the Agent Card metadata from the current deployment URL. It takes no request body or custom parameters and is typically used first to confirm capabilities, method names, and endpoint URLs before integrating. Interpret the pretty-printed JSON to verify protocol version, supported methods, and service metadata.</p>
-      <pre>curl -s "{{ base_url }}/.well-known/agent-card.json" | jq .</pre>
+      <pre>curl -s "{{ base_url }}/.well-known/agent.json" | jq .</pre>
       <h3>Example curl: paragraph count</h3>
       <p>This curl command sends the same <code>paragraphs.count</code> JSON-RPC request from a shell for quick diagnostics. It posts to <code>/a2a</code> with a JSON body and no method-specific params. Use it in scripts, CI health checks, or manual smoke tests, then read the returned count to confirm expected paragraph configuration.</p>
       <pre>curl -X POST "{{ base_url }}/a2a" \

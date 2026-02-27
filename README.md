@@ -22,7 +22,7 @@ Try it: https://guildaidemo.talknicer.com
 - Word-level stress inference from PocketSphinx phoneme alignment and pronunciation overlap scoring.
 - Confidence visualization based on `confidence_cubed = confidence ** 3` as background color.
 - A2A-compatible remote agent interface (Agent Card discovery + JSON-RPC endpoint) so other agents/platforms can call it.
-  - `GET /.well-known/agent-card.json`
+  - `GET /.well-known/agent.json`
   - `POST /a2a` (`agent.about`, `paragraphs.count`, `paragraphs.get_text`, `pronunciation.evaluate` with optional `deepgram_api_key`)
 - Production-minded observability: request/trace IDs propagated through requests, responses, and logs for run correlation.
 - Health endpoint (/healthz) to support deployment/monitoring and “is it alive?” checks.
@@ -58,7 +58,7 @@ http://localhost:8080
 - `GET /api/paragraphs`
 - `POST /api/analyze` (`multipart/form-data`: `paragraph_id`, `audio_wav`, optional `native_exemplar`)
 - `GET /healthz`
-- `GET /.well-known/agent-card.json`
+- `GET /.well-known/agent.json`
 - `POST /a2a`
 
 Agent card discovery advertises method-level capabilities for `agent.about`, `paragraphs.count`, `paragraphs.get_text`, and `pronunciation.evaluate`, including required vs optional params and the JSON-RPC endpoint URL.
@@ -163,7 +163,7 @@ Target output now includes debug fields:
 1. Read the discoverable model card:
 
 ```bash
-curl -s "$BASE_URL/.well-known/agent-card.json" | jq .
+curl -s "$BASE_URL/.well-known/agent.json" | jq .
 ```
 
 2. Build base64 payload from the paragraph 3 WAV fixture:

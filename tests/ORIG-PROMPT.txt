@@ -33,7 +33,7 @@ Add operational basics:
 A2A remote agent interface (required)
 Expose:
 1) Agent discovery card:
-- `GET /.well-known/agent-card.json` returns a JSON “Agent Card” describing this service as an A2A-compatible remote agent, including:
+- `GET /.well-known/agent.json` returns a JSON “Agent Card” describing this service as an A2A-compatible remote agent, including:
   - `name`, `description`, `version`, `protocolVersion`,
   - `url` (base URL of this service),
   - `skills`: at least one skill describing pronunciation evaluation for syllable stress from audio + paragraph,
@@ -148,7 +148,7 @@ Backend requirements (Flask)
       [{text, is_space, deepgram_idx, confidence_cubed, bg_norm, is_target, target_status, target_correct}]
 - GET `/healthz`
   - Return JSON `{request_id, status:"ok"}` (request_id may be generated or passed in).
-- GET `/.well-known/agent-card.json`
+- GET `/.well-known/agent.json`
   - Return Agent Card JSON with request_id included as an extra field.
 - POST `/a2a`
   - JSON-RPC 2.0 endpoint; include request_id in result or error payload.
@@ -183,7 +183,7 @@ UI requirements:
      - word, N/V, expected stress, inferred stress, core durations, status, feedback, and a play button to review the recorded audio.
      - Confidence is only represented by the background coloring and/or a small colored chip derived from confidence_cubed (no numeric confidence display required unless you prefer it).
 - Include a “Developer / A2A” section on the SAME page that shows:
-  - Agent Card URL: `/.well-known/agent-card.json`
+  - Agent Card URL: `/.well-known/agent.json`
   - A2A endpoint: `/a2a`
   - Example JSON-RPC `pronunciation.evaluate` request/response (with base64 placeholder)
   - Example curl commands
@@ -222,7 +222,7 @@ Clarification update (approved): frontend source files should be maintained in `
 
 Approved unified task proposal summary:
 1) Keep `main.py` as-is and implement all new app behavior in `app.py`.
-2) Build required Flask routes (`/`, `/api/paragraphs`, `/api/analyze`, `/healthz`, `/.well-known/agent-card.json`, `/a2a`) with request_id handling and logging.
+2) Build required Flask routes (`/`, `/api/paragraphs`, `/api/analyze`, `/healthz`, `/.well-known/agent.json`, `/a2a`) with request_id handling and logging.
 3) Parse paragraph file, extract targets, and apply hardcoded expected stress by label (`N`=>1, `V`=>2).
 4) Reuse/adapt `score_server.py` patterns for Deepgram flat word extraction, per-word audio slicing/padding, PocketSphinx alignment, and best-pronunciation matching by phoneme overlap.
 5) Implement robust inexact token alignment (Needleman–Wunsch/edit-distance style) between paragraph tokens and Deepgram words.

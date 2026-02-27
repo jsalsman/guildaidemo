@@ -316,7 +316,7 @@ def test_a2a_client_can_read_model_card_and_submit_paragraph3_wav(monkeypatch):
 
     client = app.test_client()
 
-    card_resp = client.get("/.well-known/agent-card.json")
+    card_resp = client.get("/.well-known/agent.json")
     assert card_resp.status_code == 200
     card = card_resp.get_json()
     assert card["skills"][0]["name"] == "pronunciation.evaluate"

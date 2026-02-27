@@ -923,7 +923,7 @@ def _agent_card() -> dict[str, Any]:
     }
 
 
-@app.route("/.well-known/agent-card.json")
+@app.route("/.well-known/agent.json")
 def agent_card():
     """Expose A2A agent-card metadata at the well-known endpoint."""
     card = _agent_card()
