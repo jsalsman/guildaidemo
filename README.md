@@ -7,12 +7,12 @@ Try it: https://guildaidemo.talknicer.com
 ## Features
 
 - Paragraph selector for 5 annotated paragraphs from `5-paragraph-syllable-stress-test_NV.txt`.
-- Browser microphone recording with WAV encoding to **16kHz / 16-bit PCM / mono**.
+- Browser microphone recording with WAV encoding.
 - "native exemplar" checkbox in the UI to mark exemplar-candidate submissions for later review.
-- Deepgram transcription (`nova-2`, `en-US`, punctuation off, diarization off) with per-word confidence.
+- Deepgram transcription with per-word confidence.
 - Inexact token alignment (Needleman–Wunsch style) between prompt and recognized words.
 - Word-level stress inference from PocketSphinx phoneme alignment and pronunciation overlap scoring.
-- Confidence visualization based on `confidence_cubed = confidence ** 3` as word **background color only**.
+- Confidence visualization based on `confidence_cubed = confidence ** 3` as background color.
 - A2A-compatible remote agent interface (Agent Card discovery + JSON-RPC endpoint) so other agents/platforms can call it.
   - `GET /.well-known/agent-card.json`
   - `POST /a2a` (`agent.about`, `pronunciation.evaluate`)
@@ -22,10 +22,7 @@ Try it: https://guildaidemo.talknicer.com
 - "Control-plane friendly" service boundaries: stable HTTP endpoints + discoverable capabilities designed to plug into orchestration/routing.
 - UI as an operator surface: single-page workflow that makes the agent capability usable and demoable (not just a script).
 - Built-in developer visibility: the app page documents the agent endpoints and example calls to ease integration and adoption.
-- Synchronous persistence of every analyzed submission as two files in a mounted bucket directory (default `/bucket`):
-  - `YYMMDDHHMMSSffffff.wav`
-  - `YYMMDDHHMMSSffffff.json`
-  where the timestamp uses **HST** (`Pacific/Honolulu`) microseconds.
+- Synchronous persistence of every analyzed submission as two files in a mounted bucket directory.
 
 ## Local setup
 
@@ -59,25 +56,14 @@ http://localhost:8080
 
 ### Persistence behavior (`/api/analyze` and `/a2a`)
 
-For each successful analysis, the app writes two files synchronously into `BUCKET_DIR` (default `/bucket`):
-
-- `{recording_id}.wav` (original uploaded WAV bytes)
-- `{recording_id}.json` (analysis sidecar)
-
-`recording_id` is generated from HST wall-clock time with microseconds:
-
-```text
-YYMMDDHHMMSSffffff
-```
-
-Example:
+For each successful analysis, the app writes two files synchronously into `BUCKET_DIR`: `{recording_id}.wav` (original uploaded WAV bytes) and `{recording_id}.json` (analysis sidecar). The `recording_id` is a microsecond-resolution timestamp string. Example:
 
 ```text
 /bucket/260226140321123456.wav
 /bucket/260226140321123456.json
 ```
 
-### Sidecar JSON schema (`schema_version = 1`)
+### Recording JSON schema
 
 Each sidecar file contains the following top-level structure:
 
@@ -155,7 +141,6 @@ The inference pipeline can learn stress decision thresholds from previously pers
   - fallback key: `word_norm`.
 - **Minimum data guardrail:** learned thresholds are used only when **both** classes have at least 2 exemplar samples.
 - **Fallback behavior:** if no usable learned threshold exists (or bucket data is empty/corrupt), the app keeps the original heuristic: `syll1 >= syll2 => stress 1 else stress 2`.
-- **Caching:** learned thresholds are cached in-process and refreshed periodically (TTL).
 
 Target output now includes debug fields:
 
@@ -196,5 +181,5 @@ Included tests cover:
 
 - Keep secrets out of source control.
 - Provide `DEEPGRAM_API_KEY` via environment configuration.
-- `Procfile` is already present for gunicorn start command and uses `app:app` (entry point: `app.py`).
+- `Procfile` for Google Cloud Run invocations runs `app.py` as `app:app`.
 - Validate locally with `devserver.sh` before deployment.
