@@ -874,6 +874,13 @@ def healthz():
     return jsonify({"request_id": g.request_id, "status": "ok"})
 
 
+@app.route("/robots.txt")
+def robots_txt() -> Response:
+    """Serve a fully permissive robots policy for all crawlers."""
+    body = "User-agent: *\nAllow: /\n"
+    return Response(body, mimetype="text/plain")
+
+
 def _agent_card() -> dict[str, Any]:
     """Build static-ish A2A agent capability metadata."""
     base_url = request.host_url.rstrip("/")

@@ -3,6 +3,18 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="description" content="Practice English stress-shift pronunciation by reading short paragraphs aloud and receiving instant noun-versus-verb syllable stress feedback with detailed analysis." />
+  <meta name="robots" content="index, follow" />
+  <meta property="og:title" content="Syllable Stress Assessment Agent" />
+  <meta property="og:description" content="Read a paragraph aloud to evaluate your noun and verb word stress pronunciation." />
+  <meta property="og:image" content="https://guildaidemo.talknicer.com/static/screenshot.png" />
+  <meta property="og:url" content="https://guildaidemo.talknicer.com/" />
+  <meta property="og:type" content="website" />
+  <meta property="og:site_name" content="GuildAIdemo.TalkNicer.com" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="Syllable Stress Assessment Agent" />
+  <meta name="twitter:description" content="Read a paragraph aloud to evaluate your noun and verb word stress pronunciation." />
+  <meta name="twitter:image" content="https://guildaidemo.talknicer.com/static/screenshot.png" />
   <title>Syllable Stress Assessment Agent</title>
   <link rel="icon" href="/static/favicon.ico" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -50,18 +62,6 @@
         <tbody></tbody>
       </table>
       <p id="timingSummary"></p>
-    </section>
-
-    <section class="card byo-key" id="byoKeySection">
-      <h2>Bring Your Own API Key</h2>
-      <p class="byo-key-copy">The shared Deepgram API key used by this demo will probably not last forever. To ensure uninterrupted access, you can provide your own — Deepgram offers $200 in free credits with no credit card required. <a href="https://console.deepgram.com/signup" target="_blank" rel="noopener noreferrer">Sign up for Deepgram</a> and <a href="https://console.deepgram.com/project/api-keys" target="_blank" rel="noopener noreferrer">generate an API key</a>.</p>
-      <div class="byo-key-row">
-        <label for="deepgramApiKeyInput">Your Deepgram API Key</label>
-        <input id="deepgramApiKeyInput" type="password" autocomplete="off" />
-        <button id="saveDeepgramKeyBtn" type="button">Save Key</button>
-        <button id="clearDeepgramKeyBtn" type="button" class="btn-secondary">Clear</button>
-      </div>
-      <p id="deepgramKeyStatus" class="byo-key-status">Using shared API key</p>
     </section>
 
     <section class="card docs">
@@ -170,6 +170,18 @@
       <pre>curl -X POST "{{ base_url }}/a2a" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":"p3-a2a-demo","method":"pronunciation.evaluate","params":{"paragraph_id":3,"audio_wav_base64":"BASE64_16KHZ_MONO_WAV"}}'</pre>
+    </section>
+
+    <section class="card byo-key" id="byoKeySection">
+      <h2>Bring Your Own API Key</h2>
+      <p class="byo-key-copy">The shared Deepgram API key used by this demo will probably not last forever. To ensure uninterrupted access, you can provide your own — Deepgram offers $200 in free credits with no credit card required. <a href="https://console.deepgram.com/signup" target="_blank" rel="noopener noreferrer">Sign up for Deepgram</a> and <a href="https://console.deepgram.com/project/api-keys" target="_blank" rel="noopener noreferrer">generate an API key</a>.</p>
+      <div class="byo-key-row">
+        <label for="deepgramApiKeyInput">Your Deepgram API Key</label>
+        <input id="deepgramApiKeyInput" type="password" autocomplete="off" />
+        <button id="saveDeepgramKeyBtn" type="button">Save Key</button>
+        <button id="clearDeepgramKeyBtn" type="button" class="btn-secondary">Clear</button>
+      </div>
+      <p id="deepgramKeyStatus" class="byo-key-status">Using shared API key</p>
     </section>
   </main>
 
