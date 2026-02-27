@@ -26,6 +26,49 @@ const recordingPlayback = document.getElementById('recordingPlayback');
 const nativeExemplar = document.getElementById('nativeExemplar');
 const docsRequestIdEl = document.getElementById('docsRequestId');
 const analysisOverlay = document.getElementById('analysisOverlay');
+const deepgramApiKeyInput = document.getElementById('deepgramApiKeyInput');
+const saveDeepgramKeyBtn = document.getElementById('saveDeepgramKeyBtn');
+const clearDeepgramKeyBtn = document.getElementById('clearDeepgramKeyBtn');
+const deepgramKeyStatus = document.getElementById('deepgramKeyStatus');
+const resultsError = document.getElementById('resultsError');
+
+
+function getCookie(name) {
+  const key = `${encodeURIComponent(name)}=`;
+  const cookies = document.cookie ? document.cookie.split('; ') : [];
+  for (const cookie of cookies) {
+    if (cookie.startsWith(key)) return decodeURIComponent(cookie.slice(key.length));
+  }
+  return '';
+}
+
+function setDeepgramCookie(value) {
+  const expires = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toUTCString();
+  document.cookie = `deepgram_api_key=${encodeURIComponent(value)}; expires=${expires}; path=/; SameSite=Lax`;
+}
+
+function clearDeepgramCookie() {
+  document.cookie = 'deepgram_api_key=; expires=Thu, 01 Jan 1970 00:00:00 GMT; path=/; SameSite=Lax';
+}
+
+function refreshDeepgramStatus() {
+  const hasKey = Boolean(getCookie('deepgram_api_key').trim());
+  if (deepgramKeyStatus) {
+    deepgramKeyStatus.textContent = hasKey ? 'Using your API key' : 'Using shared API key';
+  }
+}
+
+function saveDeepgramKey() {
+  if (!deepgramApiKeyInput) return;
+  setDeepgramCookie(deepgramApiKeyInput.value || '');
+  refreshDeepgramStatus();
+}
+
+function clearDeepgramKey() {
+  if (deepgramApiKeyInput) deepgramApiKeyInput.value = '';
+  clearDeepgramCookie();
+  refreshDeepgramStatus();
+}
 
 // Convert normalized WebAudio samples (Float32 in [-1, 1]) to signed 16-bit PCM,
 // which matches the backend WAV expectations (16 kHz, mono, 16-bit).
@@ -250,6 +293,10 @@ function formatCoreDurationsWithThreshold(target) {
 function renderResults(data) {
   setRequestId(data.request_id);
   resultsSection.hidden = false;
+  if (resultsError) {
+    resultsError.hidden = true;
+    resultsError.textContent = '';
+  }
   const s = data.score_summary;
   scoreSummary.textContent = `Correct ${s.percent_correct}% (${s.scored_targets}/${s.total_targets} scored, missing ${s.missing_targets}, unaligned ${s.unaligned_targets})`;
 
@@ -312,6 +359,19 @@ function renderResults(data) {
   }
 }
 
+function renderResultsError(data) {
+  setRequestId(data.request_id);
+  resultsSection.hidden = false;
+  renderedParagraph.innerHTML = '';
+  targetsTableBody.innerHTML = '';
+  if (scoreSummary) scoreSummary.textContent = '';
+  if (timingSummary) timingSummary.textContent = '';
+  if (resultsError) {
+    resultsError.textContent = data.error || 'Analysis failed.';
+    resultsError.hidden = false;
+  }
+}
+
 async function submitAnalysis() {
   if (!recordingBlob) return;
   const form = new FormData();
@@ -325,7 +385,7 @@ async function submitAnalysis() {
     const resp = await fetch('/api/analyze', { method: 'POST', body: form });
     const data = await resp.json();
     if (!resp.ok) {
-      alert(data.error || 'Analysis failed');
+      renderResultsError(data);
       return;
     }
     renderResults(data);
@@ -354,5 +414,8 @@ recordBtn.addEventListener('click', async () => {
 });
 
 submitBtn.addEventListener('click', submitAnalysis);
+if (saveDeepgramKeyBtn) saveDeepgramKeyBtn.addEventListener('click', saveDeepgramKey);
+if (clearDeepgramKeyBtn) clearDeepgramKeyBtn.addEventListener('click', clearDeepgramKey);
 
+refreshDeepgramStatus();
 loadParagraphs();

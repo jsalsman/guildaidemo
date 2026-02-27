@@ -196,6 +196,12 @@ pre {
   padding-top: 0;
 }
 
+.results-error {
+  color: #b00020;
+  font-weight: 700;
+  margin: 0 0 12px;
+}
+
 .github-corner {
   position: fixed;
   top: 0;
@@ -260,4 +266,47 @@ pre {
 .analysis-overlay img {
   width: 100px;
   height: 100px;
+}
+
+
+.byo-key h2 {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.byo-key-copy {
+  margin: 0 0 10px;
+  color: #555;
+  font-size: 14px;
+}
+
+.byo-key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.byo-key-row label {
+  font-size: 14px;
+  color: #444;
+}
+
+#deepgramApiKeyInput {
+  border: 1px solid #d0d7de;
+  border-radius: 6px;
+  padding: 8px 10px;
+  min-width: 260px;
+  max-width: 100%;
+  font-family: inherit;
+}
+
+.btn-secondary {
+  background: #6b7280;
+}
+
+.byo-key-status {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: #666;
 }

@@ -6,6 +6,7 @@ from app import (
     PRONUNCIATIONS,
     _load_adaptive_thresholds,
     _THRESHOLD_CACHE,
+    DeepgramAPIError,
     app,
     confidence_cubed,
     get_learned_threshold,
@@ -206,6 +207,91 @@ def test_malformed_json_ignored_for_threshold_cache(monkeypatch, tmp_path):
     monkeypatch.setattr("app.BUCKET_DIR", str(tmp_path))
     _THRESHOLD_CACHE.update({"loaded_at": 0.0, "bucket_dir": None, "thresholds": {}})
     assert get_learned_threshold("record") is None
+
+
+
+def test_api_analyze_surfaces_friendly_deepgram_auth_error(monkeypatch, tmp_path):
+    def fake_analyze_payload(paragraph, wav_bytes):
+        raise DeepgramAPIError(
+            "Deepgram rejected this API key (401 Unauthorized). Please set a working API key and submit again.",
+            status_code=401,
+        )
+
+    monkeypatch.setattr("app.analyze_payload", fake_analyze_payload)
+
+    wav_path = Path(__file__).parent / "abc340c7-fc39-41f0-b1a6-3557f83b7707.wav"
+    client = app.test_client()
+    with wav_path.open("rb") as fh:
+        resp = client.post(
+            "/api/analyze",
+            data={"paragraph_id": "1", "audio_wav": (fh, wav_path.name)},
+            content_type="multipart/form-data",
+        )
+
+    assert resp.status_code == 401
+    payload = resp.get_json()
+    assert payload["error_code"] == 401
+    assert "set a working API key" in payload["error"]
+    assert "https://api.deepgram.com" not in payload["error"]
+
+
+
+def test_a2a_bad_media_maps_to_invalid_params_error(monkeypatch):
+    def fake_analyze_payload(paragraph, wav_bytes, deepgram_api_key=None):
+        raise DeepgramAPIError(
+            "Deepgram could not process this audio request (400 Bad Request). Please verify the media format and try again.",
+            status_code=400,
+        )
+
+    monkeypatch.setattr("app.analyze_payload", fake_analyze_payload)
+
+    wav_path = Path(__file__).parent / "abc340c7-fc39-41f0-b1a6-3557f83b7707.wav"
+    b64 = base64.b64encode(wav_path.read_bytes()).decode("ascii")
+
+    client = app.test_client()
+    resp = client.post(
+        "/a2a",
+        json={
+            "jsonrpc": "2.0",
+            "id": "bad-media",
+            "method": "pronunciation.evaluate",
+            "params": {"paragraph_id": 1, "audio_wav_base64": b64},
+        },
+    )
+
+    assert resp.status_code == 400
+    payload = resp.get_json()
+    assert payload["error"]["code"] == -32602
+    assert "verify the media format" in payload["error"]["message"]
+
+
+def test_a2a_surfaces_friendly_deepgram_rate_limit_error(monkeypatch):
+    def fake_analyze_payload(paragraph, wav_bytes, deepgram_api_key=None):
+        raise DeepgramAPIError(
+            "Deepgram rate limit reached (429 Too Many Requests). Please wait briefly, then press Submit for Analysis again.",
+            status_code=429,
+        )
+
+    monkeypatch.setattr("app.analyze_payload", fake_analyze_payload)
+
+    wav_path = Path(__file__).parent / "abc340c7-fc39-41f0-b1a6-3557f83b7707.wav"
+    b64 = base64.b64encode(wav_path.read_bytes()).decode("ascii")
+
+    client = app.test_client()
+    resp = client.post(
+        "/a2a",
+        json={
+            "jsonrpc": "2.0",
+            "id": "rate-limit",
+            "method": "pronunciation.evaluate",
+            "params": {"paragraph_id": 1, "audio_wav_base64": b64},
+        },
+    )
+
+    assert resp.status_code == 429
+    payload = resp.get_json()
+    assert payload["error"]["code"] == -32000
+    assert "Too Many Requests" in payload["error"]["message"]
 
 
 def test_a2a_client_can_read_model_card_and_submit_paragraph3_wav(monkeypatch):

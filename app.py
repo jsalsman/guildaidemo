@@ -26,10 +26,8 @@ import requests
 from flask import Flask, Response, g, has_request_context, jsonify, render_template, request
 
 
-# Deepgram API key used for outbound ASR requests.
+# Shared fallback Deepgram API key used for outbound ASR requests.
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY")
-if not DEEPGRAM_API_KEY:
-    raise RuntimeError("DEEPGRAM_API_KEY is not configured; please add it to the environment")
 # Deepgram endpoint with explicit query params.
 # Keeping model/language/punctuation flags fixed reduces variation between runs,
 # which makes stress-threshold tuning and regression debugging less noisy.
@@ -66,6 +64,15 @@ app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 _DECODER = None
 # Learned-threshold cache keyed by context/word, refreshed on TTL expiry.
 _THRESHOLD_CACHE: dict[str, Any] = {"loaded_at": 0.0, "bucket_dir": None, "thresholds": {}}
+
+
+class DeepgramAPIError(RuntimeError):
+    """Friendly, client-safe wrapper for upstream Deepgram API failures."""
+
+    def __init__(self, user_message: str, status_code: int | None = None):
+        super().__init__(user_message)
+        self.user_message = user_message
+        self.status_code = status_code
 
 
 def _track_timing(metric: str, elapsed_sec: float) -> None:
@@ -422,14 +429,68 @@ def read_wav_bytes(wav_bytes: bytes) -> WavData:
     return WavData(sample_rate=sr, channels=channels, sample_width=sw, pcm_bytes=pcm)
 
 
-def deepgram_transcribe(wav_bytes: bytes) -> list[dict[str, Any]]:
+def resolve_deepgram_api_key(explicit_key: str | None = None) -> str:
+    """Resolve Deepgram key source with precedence: explicit, cookie, env."""
+    if explicit_key and explicit_key.strip():
+        log("Using Deepgram key from: a2a_param")
+        return explicit_key.strip()
+
+    # Intentionally read a JS-managed cookie (HttpOnly=False) for demo/dev UX.
+    # This is acceptable for this tool, but production deployments should
+    # reconsider cookie scope/storage strategy and threat model.
+    cookie_key = request.cookies.get("deepgram_api_key", "") if has_request_context() else ""
+    if cookie_key and cookie_key.strip():
+        log("Using Deepgram key from: cookie")
+        return cookie_key.strip()
+
+    if DEEPGRAM_API_KEY and DEEPGRAM_API_KEY.strip():
+        log("Using Deepgram key from: env")
+        return DEEPGRAM_API_KEY.strip()
+
+    raise RuntimeError("No Deepgram API key provided (cookie, A2A param, or DEEPGRAM_API_KEY env)")
+
+
+def deepgram_transcribe(wav_bytes: bytes, deepgram_api_key: str | None = None) -> list[dict[str, Any]]:
     """Submit WAV to Deepgram and return flattened per-word metadata."""
+    resolved_key = resolve_deepgram_api_key(deepgram_api_key)
     headers = {
-        "Authorization": f"Token {DEEPGRAM_API_KEY}",
+        "Authorization": f"Token {resolved_key}",
         "Content-Type": "audio/wav",
     }
-    resp = requests.post(DEEPGRAM_URL, headers=headers, data=wav_bytes, timeout=40)
-    resp.raise_for_status()
+    try:
+        resp = requests.post(DEEPGRAM_URL, headers=headers, data=wav_bytes, timeout=40)
+        resp.raise_for_status()
+    except requests.HTTPError:
+        status = resp.status_code if "resp" in locals() else None
+        if status == 400:
+            raise DeepgramAPIError(
+                "Deepgram could not process this audio request (400 Bad Request). Please verify the media format and try again.",
+                status_code=400,
+            ) from None
+        if status == 401:
+            raise DeepgramAPIError(
+                "Deepgram rejected this API key (401 Unauthorized). Please set a working API key and submit again.",
+                status_code=401,
+            ) from None
+        if status == 402:
+            raise DeepgramAPIError(
+                "Deepgram reports this API key is out of funds (402 Payment Required). Please top up credits or use a different key.",
+                status_code=402,
+            ) from None
+        if status == 429:
+            raise DeepgramAPIError(
+                "Deepgram rate limit reached (429 Too Many Requests). Please wait briefly, then press Submit for Analysis again.",
+                status_code=429,
+            ) from None
+        raise DeepgramAPIError(
+            f"Deepgram request failed (HTTP {status or 'unknown'}). Please verify your API key and try again.",
+            status_code=status,
+        ) from None
+    except requests.RequestException:
+        raise DeepgramAPIError(
+            "Deepgram request failed due to a network or service issue. Please try again.",
+            status_code=None,
+        ) from None
     payload = resp.json()
     words = payload["results"]["channels"][0]["alternatives"][0].get("words", [])
     flat = []
@@ -659,11 +720,11 @@ def build_render_words(display_text: str, alignment: dict[int, int], deepgram_wo
     return render
 
 
-def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, Any]:
+def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes, deepgram_api_key: str | None = None) -> dict[str, Any]:
     """End-to-end analysis pipeline for a paragraph and uploaded WAV audio."""
     # 1) ASR transcript with timestamps/confidence per recognized word.
     deepgram_start = time.perf_counter()
-    deepgram_words = deepgram_transcribe(wav_bytes)
+    deepgram_words = deepgram_transcribe(wav_bytes, deepgram_api_key=deepgram_api_key)
     deepgram_elapsed = time.perf_counter() - deepgram_start
     # 2) Normalize tokens and align paragraph words to ASR words.
     ref_norm = [normalize_token(t) for t in paragraph["tokens"]]
@@ -833,7 +894,7 @@ def _agent_card() -> dict[str, Any]:
                 "pronunciation.evaluate": {
                     "description": "Evaluate a 16kHz mono WAV against paragraph_id or paragraph_text.",
                     "requiredParams": ["audio_wav_base64"],
-                    "optionalParams": ["paragraph_id", "paragraph_text", "native_exemplar"],
+                    "optionalParams": ["paragraph_id", "paragraph_text", "native_exemplar", "deepgram_api_key"],
                 },
                 "paragraphs.count": {
                     "description": "Return the number of configured practice paragraphs.",
@@ -899,6 +960,10 @@ def api_analyze():
         analysis["persistence"] = persisted
         log(f"analyze completed paragraph_id={paragraph_id} words={len(analysis['deepgram_words'])}")
         return jsonify(analysis)
+    except DeepgramAPIError as exc:
+        log(f"analyze failed deepgram status={exc.status_code} message={exc.user_message}")
+        http_status = exc.status_code if exc.status_code in (400, 401, 402, 429) else 502
+        return jsonify({"request_id": g.request_id, "error": exc.user_message, "error_code": exc.status_code}), http_status
     except Exception as exc:
         log(f"analyze failed: {exc}")
         return jsonify({"request_id": g.request_id, "error": str(exc)}), 500
@@ -952,6 +1017,7 @@ def a2a():
         p_text = params.get("paragraph_text")
         b64 = params.get("audio_wav_base64")
         native_exemplar = parse_bool(params.get("native_exemplar"))
+        deepgram_api_key = params.get("deepgram_api_key")
         if not b64:
             return rpc_err(-32602, "audio_wav_base64 is required")
         if not p_id and not p_text:
@@ -970,7 +1036,10 @@ def a2a():
             paragraph = PARAGRAPHS[p_id - 1]
 
         try:
-            analysis = analyze_payload(paragraph, wav_bytes)
+            if isinstance(deepgram_api_key, str) and deepgram_api_key.strip():
+                analysis = analyze_payload(paragraph, wav_bytes, deepgram_api_key=deepgram_api_key)
+            else:
+                analysis = analyze_payload(paragraph, wav_bytes)
             analysis.pop("render_words", None)
             persisted = persist_submission(
                 wav_bytes=wav_bytes,
@@ -988,6 +1057,13 @@ def a2a():
                 "id": rpc_id,
                 "result": {"request_id": g.request_id, "analysis": analysis, "persistence": persisted},
             })
+        except DeepgramAPIError as exc:
+            log(f"a2a eval failed deepgram status={exc.status_code} message={exc.user_message}")
+            if exc.status_code == 400:
+                return rpc_err(-32602, exc.user_message, status=400)
+            if exc.status_code in (401, 402, 429):
+                return rpc_err(-32000, exc.user_message, status=exc.status_code)
+            return rpc_err(-32000, exc.user_message, status=502)
         except Exception as exc:
             log(f"a2a eval failed: {exc}")
             return rpc_err(-32000, str(exc), status=500)

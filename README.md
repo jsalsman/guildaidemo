@@ -8,6 +8,7 @@ Try it: https://guildaidemo.talknicer.com
 
 - Paragraph selector for all annotated paragraphs loaded from `5-paragraph-syllable-stress-test_NV.txt` (currently 5, but dynamic).
 - Browser microphone recording with WAV encoding.
+- Optional "Bring Your Own Deepgram API Key" UI section that stores a user-supplied key in a `deepgram_api_key` browser cookie (365-day expiry).
 - "native exemplar" checkbox in the UI to mark exemplar-candidate submissions for later review.
 - Deepgram transcription with per-word confidence.
 - Inexact token alignment (Needleman–Wunsch style) between prompt and recognized words.
@@ -15,7 +16,7 @@ Try it: https://guildaidemo.talknicer.com
 - Confidence visualization based on `confidence_cubed = confidence ** 3` as background color.
 - A2A-compatible remote agent interface (Agent Card discovery + JSON-RPC endpoint) so other agents/platforms can call it.
   - `GET /.well-known/agent-card.json`
-  - `POST /a2a` (`agent.about`, `paragraphs.count`, `paragraphs.get_text`, `pronunciation.evaluate`)
+  - `POST /a2a` (`agent.about`, `paragraphs.count`, `paragraphs.get_text`, `pronunciation.evaluate` with optional `deepgram_api_key`)
 - Production-minded observability: request/trace IDs propagated through requests, responses, and logs for run correlation.
 - Health endpoint (/healthz) to support deployment/monitoring and “is it alive?” checks.
 - Structured, machine-consumable outputs (clear JSON schema for words, alignments, target evaluations, and summary metrics).
@@ -26,7 +27,7 @@ Try it: https://guildaidemo.talknicer.com
 
 ## Local setup
 
-1. Make sure the `DEEPGRAM_API_KEY` environment variable is set. (It is in the Cloud Run configuration. We no longer use an `.env` file because we hope to make this repo public.)
+1. Optionally set `DEEPGRAM_API_KEY` as a shared fallback key for server-side transcription. The app now prefers a non-empty `deepgram_api_key` cookie when present and falls back to this environment variable when needed.
 
 2. (Optional, but recommended for persistence testing) set a custom bucket mount directory:
 
@@ -189,11 +190,22 @@ curl -s -X POST "$BASE_URL/a2a" \
 5. Submit `pronunciation.evaluate` as an A2A client:
 
 ```bash
-jq -n --arg audio "$AUDIO_B64" '{jsonrpc:"2.0",id:"p3-a2a-demo",method:"pronunciation.evaluate",params:{paragraph_id:3,audio_wav_base64:$audio}}' \
+jq -n --arg audio "$AUDIO_B64" --arg dg "dg_live_xxx" '{jsonrpc:"2.0",id:"p3-a2a-demo",method:"pronunciation.evaluate",params:{paragraph_id:3,audio_wav_base64:$audio,deepgram_api_key:$dg}}' \\
 | curl -s -X POST "$BASE_URL/a2a" \
     -H "Content-Type: application/json" \
     -d @- | jq .
 ```
+
+
+### Deepgram API key resolution order
+
+For requests that need transcription, the app resolves the Deepgram key in this order:
+
+1. `deepgram_api_key` A2A method parameter (if provided and non-empty)
+2. `deepgram_api_key` browser cookie (if provided and non-empty)
+3. `DEEPGRAM_API_KEY` environment variable
+
+Server logs include only the source (`a2a_param`, `cookie`, or `env`) and never print key values.
 
 ## Manual validation flow
 
@@ -220,8 +232,8 @@ pytest -q
 Included tests cover:
 - paragraph parsing and target extraction,
 - sequence alignment behavior,
-- confidence-cubed + deterministic background normalization,
-- persistence of HST sidecar+WAV files and schema fields using the paragraph 3 test WAV fixture.
+- confidence-cubed and deterministic background normalization,
+- persistence of sidecar and WAV files and schema fields using the paragraph 3 test WAV fixture.
 
 ## Cloud Run notes
 
