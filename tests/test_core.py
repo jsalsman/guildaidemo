@@ -254,3 +254,46 @@ def test_a2a_client_can_read_model_card_and_submit_paragraph3_wav(monkeypatch):
     assert rpc["id"] == "p3-a2a-test"
     assert rpc["result"]["analysis"]["score_summary"]["percent_correct"] == 100.0
     assert rpc["result"]["persistence"]["recording_id"] == "260227123456000001"
+
+
+def test_a2a_paragraph_helpers_expose_count_and_plain_text():
+    client = app.test_client()
+
+    count_resp = client.post(
+        "/a2a",
+        json={"jsonrpc": "2.0", "id": "p-count", "method": "paragraphs.count", "params": {}},
+    )
+    assert count_resp.status_code == 200
+    count_rpc = count_resp.get_json()
+    assert count_rpc["result"]["paragraph_count"] == len(client.get("/api/paragraphs").get_json()["paragraphs"])
+
+    text_resp = client.post(
+        "/a2a",
+        json={
+            "jsonrpc": "2.0",
+            "id": "p-text-1",
+            "method": "paragraphs.get_text",
+            "params": {"paragraph_id": 1},
+        },
+    )
+    assert text_resp.status_code == 200
+    text_rpc = text_resp.get_json()
+    assert text_rpc["result"]["paragraph_id"] == 1
+    assert "[" not in text_rpc["result"]["paragraph_text"]
+
+
+def test_a2a_paragraph_text_rejects_invalid_id():
+    client = app.test_client()
+    resp = client.post(
+        "/a2a",
+        json={
+            "jsonrpc": "2.0",
+            "id": "p-text-invalid",
+            "method": "paragraphs.get_text",
+            "params": {"paragraph_id": 0},
+        },
+    )
+    assert resp.status_code == 400
+    payload = resp.get_json()
+    assert payload["error"]["code"] == -32602
+    assert payload["error"]["message"].startswith("paragraph_id must be an int in range 1..")

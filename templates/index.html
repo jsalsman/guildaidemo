@@ -42,21 +42,38 @@
       <table id="targetsTable">
         <thead>
           <tr>
-            <th>Word</th><th>N/V</th><th>Expected</th><th>Inferred</th><th>Core Durations</th><th>Status</th><th>Feedback</th>
+            <th>Target word</th><th>N/V</th><th>Expected</th><th>Inferred</th><th>Core Durations</th><th>Status</th><th>Feedback</th>
           </tr>
         </thead>
         <tbody></tbody>
       </table>
+      <p id="timingSummary"></p>
     </section>
 
     <section class="card docs">
       <h2>Developer / A2A</h2>
       <ul>
         <li>Agent Card URL: <a id="agentCardLink" href="/.well-known/agent-card.json"><code>/.well-known/agent-card.json</code></a></li>
-        <li>A2A JSON-RPC endpoint: <code>/a2a</code></li>
+        <li>A2A JSON-RPC endpoint: <code>/a2a</code> (methods: <code>agent.about</code>, <code>paragraphs.count</code>, <code>paragraphs.get_text</code>, <code>pronunciation.evaluate</code>)</li>
         <li>Health endpoint: <code>/healthz</code></li>
         <li>request_id: <code id="docsRequestId">-</code></li>
       </ul>
+      <h3>Example request: paragraphs.count</h3>
+      <pre>{
+  "jsonrpc": "2.0",
+  "id": "p-count",
+  "method": "paragraphs.count",
+  "params": {}
+}</pre>
+      <h3>Example request: paragraphs.get_text</h3>
+      <pre>{
+  "jsonrpc": "2.0",
+  "id": "p-text-3",
+  "method": "paragraphs.get_text",
+  "params": {
+    "paragraph_id": 3
+  }
+}</pre>
       <h3>Example request: pronunciation.evaluate</h3>
       <pre>{
   "jsonrpc": "2.0",
@@ -89,6 +106,14 @@
 }</pre>
       <h3>Example curl: model card discovery</h3>
       <pre>curl -s "$BASE_URL/.well-known/agent-card.json" | jq .</pre>
+      <h3>Example curl: paragraph count</h3>
+      <pre>curl -X POST "$BASE_URL/a2a" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"p-count","method":"paragraphs.count","params":{}}'</pre>
+      <h3>Example curl: plain paragraph text</h3>
+      <pre>curl -X POST "$BASE_URL/a2a" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"p-text-3","method":"paragraphs.get_text","params":{"paragraph_id":3}}'</pre>
       <h3>Example curl: paragraph 3 evaluation</h3>
       <pre>curl -X POST "$BASE_URL/a2a" \
   -H "Content-Type: application/json" \

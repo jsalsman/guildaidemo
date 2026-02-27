@@ -19,6 +19,7 @@ const resultsSection = document.getElementById('resultsSection');
 const renderedParagraph = document.getElementById('renderedParagraph');
 const targetsTableBody = document.querySelector('#targetsTable tbody');
 const scoreSummary = document.getElementById('scoreSummary');
+const timingSummary = document.getElementById('timingSummary');
 const recordingPlayback = document.getElementById('recordingPlayback');
 const nativeExemplar = document.getElementById('nativeExemplar');
 const docsRequestIdEl = document.getElementById('docsRequestId');
@@ -210,6 +211,12 @@ function formatDuration(value) {
   return Number(value).toFixed(2);
 }
 
+function formatSeconds(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '0.00';
+  return numeric.toFixed(2);
+}
+
 function formatCoreDurationsWithThreshold(target) {
   const s1 = target?.core_durations?.syll1;
   const s2 = target?.core_durations?.syll2;
@@ -279,6 +286,11 @@ function renderResults(data) {
       <td>${t.feedback}</td>
     `;
     targetsTableBody.appendChild(tr);
+  }
+
+  if (timingSummary) {
+    const timing = data.timing || {};
+    timingSummary.textContent = `Timing (s): recording ${formatSeconds(timing.recording_duration_sec)}, bucket JSON read/process ${formatSeconds(timing.bucket_json_read_process_sec)}, Deepgram API ${formatSeconds(timing.deepgram_api_sec)}, PocketSphinx alignment ${formatSeconds(timing.pocketsphinx_alignment_sec)}, persisted files ${formatSeconds(timing.persist_output_files_sec)}`;
   }
 }
 

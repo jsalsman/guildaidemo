@@ -23,7 +23,7 @@ from typing import Any
 
 import cmudict
 import requests
-from flask import Flask, Response, g, jsonify, render_template, request
+from flask import Flask, Response, g, has_request_context, jsonify, render_template, request
 
 
 # Deepgram API key used for outbound ASR requests.
@@ -63,6 +63,16 @@ app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 _DECODER = None
 # Learned-threshold cache keyed by context/word, refreshed on TTL expiry.
 _THRESHOLD_CACHE: dict[str, Any] = {"loaded_at": 0.0, "bucket_dir": None, "thresholds": {}}
+
+
+def _track_timing(metric: str, elapsed_sec: float) -> None:
+    """Accumulate request-scoped timing metrics when a request context is active."""
+    if not has_request_context():
+        return
+    timings = getattr(g, "timings", None)
+    if not isinstance(timings, dict):
+        return
+    timings[metric] = float(timings.get(metric, 0.0)) + float(elapsed_sec)
 
 
 def log(message: str) -> None:
@@ -200,6 +210,7 @@ def get_learned_threshold(word_norm: str, paragraph_id: int | None = None, token
         or (now - float(_THRESHOLD_CACHE.get("loaded_at", 0.0))) >= THRESHOLD_CACHE_TTL_SEC
     )
     if should_reload:
+        load_start = time.perf_counter()
         try:
             # Refresh cache from the bucket directory on TTL expiry/bucket switch.
             _THRESHOLD_CACHE["thresholds"] = _load_adaptive_thresholds(BUCKET_DIR)
@@ -211,6 +222,8 @@ def get_learned_threshold(word_norm: str, paragraph_id: int | None = None, token
             _THRESHOLD_CACHE["thresholds"] = {}
             _THRESHOLD_CACHE["loaded_at"] = now
             _THRESHOLD_CACHE["bucket_dir"] = BUCKET_DIR
+        finally:
+            _track_timing("bucket_json_read_process_sec", time.perf_counter() - load_start)
 
     thresholds = _THRESHOLD_CACHE.get("thresholds", {})
     ctx_key = _threshold_key(word_norm, paragraph_id, token_index)
@@ -239,6 +252,7 @@ def persist_submission(
     json_path = os.path.join(BUCKET_DIR, f"{recording_id}.json")
     tmp_json_path = f"{json_path}.tmp"
 
+    write_start = time.perf_counter()
     with open(wav_path, "wb") as wf:
         wf.write(wav_bytes)
         wf.flush()
@@ -306,6 +320,7 @@ def persist_submission(
         jf.flush()
         os.fsync(jf.fileno())
     os.replace(tmp_json_path, json_path)
+    _track_timing("persist_output_files_sec", time.perf_counter() - write_start)
 
     return {
         "recording_id": recording_id,
@@ -640,7 +655,9 @@ def build_render_words(display_text: str, alignment: dict[int, int], deepgram_wo
 def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, Any]:
     """End-to-end analysis pipeline for a paragraph and uploaded WAV audio."""
     # 1) ASR transcript with timestamps/confidence per recognized word.
+    deepgram_start = time.perf_counter()
     deepgram_words = deepgram_transcribe(wav_bytes)
+    deepgram_elapsed = time.perf_counter() - deepgram_start
     # 2) Normalize tokens and align paragraph words to ASR words.
     ref_norm = [normalize_token(t) for t in paragraph["tokens"]]
     hyp_norm = [normalize_token(w["word"]) for w in deepgram_words]
@@ -650,6 +667,7 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, An
     wav_data = read_wav_bytes(wav_bytes)
     duration = len(wav_data.pcm_bytes) / (wav_data.sample_rate * wav_data.channels * wav_data.sample_width)
 
+    alignment_total = 0.0
     targets_out = []
     for t in paragraph["targets"]:
         # Start each target with a pessimistic default that is refined if aligned.
@@ -685,7 +703,9 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, An
 
         try:
             segment = slice_word_pcm(wav_data, dg["start"], dg["end"], duration)
+            alignment_start = time.perf_counter()
             phones = align_phonemes(t["word"], segment, dg["start"])
+            alignment_total += time.perf_counter() - alignment_start
             inferred = infer_stress_from_word(t["word"], phones, paragraph_id=paragraph.get("id"), token_index=t.get("token_index"))
             base.update(inferred)
             if inferred["inferred_stress"] is not None:
@@ -714,6 +734,14 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, An
 
     render_words = build_render_words(paragraph["display_text"], alignment, deepgram_words, paragraph["targets"], targets_out)
 
+    timing = {
+        "recording_duration_sec": round(duration, 2),
+        "bucket_json_read_process_sec": round(float(getattr(g, "timings", {}).get("bucket_json_read_process_sec", 0.0)), 2),
+        "deepgram_api_sec": round(deepgram_elapsed, 2),
+        "pocketsphinx_alignment_sec": round(alignment_total, 2),
+        "persist_output_files_sec": round(float(getattr(g, "timings", {}).get("persist_output_files_sec", 0.0)), 2),
+    }
+
     return {
         "deepgram_words": deepgram_words,
         "alignment": [{"paragraph_token_index": k, "deepgram_word_index": v} for k, v in sorted(alignment.items())],
@@ -726,6 +754,7 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, An
             "unaligned_targets": len(unaligned),
         },
         "render_words": render_words,
+        "timing": timing,
     }
 
 
@@ -749,6 +778,7 @@ def attach_request_id() -> None:
     """Attach request context fields to flask.g before request handling."""
     g.request_id = get_request_id()
     g.client_ip = get_client_ip()
+    g.timings = {}
 
 
 @app.after_request
@@ -798,6 +828,13 @@ def _agent_card() -> dict[str, Any]:
                     "requiredParams": ["audio_wav_base64"],
                     "optionalParams": ["paragraph_id", "paragraph_text", "native_exemplar"],
                 },
+                "paragraphs.count": {
+                    "description": "Return the number of configured practice paragraphs.",
+                },
+                "paragraphs.get_text": {
+                    "description": "Return plain unannotated paragraph text for a given paragraph_id.",
+                    "requiredParams": ["paragraph_id"],
+                },
             },
         },
         "skills": [
@@ -824,13 +861,14 @@ def api_analyze():
     """Handle multipart form upload and return full stress analysis JSON."""
     # Parse and validate paragraph id early for fast failure on malformed requests.
     paragraph_raw = request.form.get("paragraph_id", "0")
+    paragraph_range_msg = f"paragraph_id must be 1..{len(PARAGRAPHS)}"
     try:
         paragraph_id = int(paragraph_raw)
     except (TypeError, ValueError):
-        return jsonify({"request_id": g.request_id, "error": "paragraph_id must be 1..5"}), 400
+        return jsonify({"request_id": g.request_id, "error": paragraph_range_msg}), 400
     audio = request.files.get("audio_wav")
     if paragraph_id < 1 or paragraph_id > len(PARAGRAPHS):
-        return jsonify({"request_id": g.request_id, "error": "paragraph_id must be 1..5"}), 400
+        return jsonify({"request_id": g.request_id, "error": paragraph_range_msg}), 400
     if not audio:
         return jsonify({"request_id": g.request_id, "error": "audio_wav is required"}), 400
     native_exemplar = parse_bool(request.form.get("native_exemplar"))
@@ -846,6 +884,9 @@ def api_analyze():
             analysis=analysis,
             native_exemplar=native_exemplar,
             source="web",
+        )
+        analysis.setdefault("timing", {})["persist_output_files_sec"] = round(
+            float(getattr(g, "timings", {}).get("persist_output_files_sec", 0.0)), 2
         )
         analysis["request_id"] = g.request_id
         analysis["persistence"] = persisted
@@ -877,6 +918,28 @@ def a2a():
         result["request_id"] = g.request_id
         return jsonify({"jsonrpc": "2.0", "id": rpc_id, "result": result})
 
+    if method == "paragraphs.count":
+        return jsonify({
+            "jsonrpc": "2.0",
+            "id": rpc_id,
+            "result": {"request_id": g.request_id, "paragraph_count": len(PARAGRAPHS)},
+        })
+
+    if method == "paragraphs.get_text":
+        p_id = params.get("paragraph_id")
+        if not isinstance(p_id, int) or p_id < 1 or p_id > len(PARAGRAPHS):
+            return rpc_err(-32602, f"paragraph_id must be an int in range 1..{len(PARAGRAPHS)}")
+        paragraph = PARAGRAPHS[p_id - 1]
+        return jsonify({
+            "jsonrpc": "2.0",
+            "id": rpc_id,
+            "result": {
+                "request_id": g.request_id,
+                "paragraph_id": p_id,
+                "paragraph_text": paragraph["display_text"],
+            },
+        })
+
     if method == "pronunciation.evaluate":
         p_id = params.get("paragraph_id")
         p_text = params.get("paragraph_text")
@@ -896,7 +959,7 @@ def a2a():
             paragraph = parse_paragraphs(p_text)[0]
         else:
             if not isinstance(p_id, int) or p_id < 1 or p_id > len(PARAGRAPHS):
-                return rpc_err(-32602, "paragraph_id must be an int in range 1..5")
+                return rpc_err(-32602, f"paragraph_id must be an int in range 1..{len(PARAGRAPHS)}")
             paragraph = PARAGRAPHS[p_id - 1]
 
         try:
@@ -909,6 +972,9 @@ def a2a():
                 analysis=analysis,
                 native_exemplar=native_exemplar,
                 source="a2a",
+            )
+            analysis.setdefault("timing", {})["persist_output_files_sec"] = round(
+                float(getattr(g, "timings", {}).get("persist_output_files_sec", 0.0)), 2
             )
             return jsonify({
                 "jsonrpc": "2.0",

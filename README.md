@@ -6,7 +6,7 @@ Try it: https://guildaidemo.talknicer.com
 
 ## Features
 
-- Paragraph selector for 5 annotated paragraphs from `5-paragraph-syllable-stress-test_NV.txt`.
+- Paragraph selector for all annotated paragraphs loaded from `5-paragraph-syllable-stress-test_NV.txt` (currently 5, but dynamic).
 - Browser microphone recording with WAV encoding.
 - "native exemplar" checkbox in the UI to mark exemplar-candidate submissions for later review.
 - Deepgram transcription with per-word confidence.
@@ -15,7 +15,7 @@ Try it: https://guildaidemo.talknicer.com
 - Confidence visualization based on `confidence_cubed = confidence ** 3` as background color.
 - A2A-compatible remote agent interface (Agent Card discovery + JSON-RPC endpoint) so other agents/platforms can call it.
   - `GET /.well-known/agent-card.json`
-  - `POST /a2a` (`agent.about`, `pronunciation.evaluate`)
+  - `POST /a2a` (`agent.about`, `paragraphs.count`, `paragraphs.get_text`, `pronunciation.evaluate`)
 - Production-minded observability: request/trace IDs propagated through requests, responses, and logs for run correlation.
 - Health endpoint (/healthz) to support deployment/monitoring and “is it alive?” checks.
 - Structured, machine-consumable outputs (clear JSON schema for words, alignments, target evaluations, and summary metrics).
@@ -46,6 +46,24 @@ export BUCKET_DIR=/bucket
 http://localhost:8080
 ```
 
+
+### Playwright screenshot troubleshooting
+
+If `mcp__browser_tools__run_playwright_script` fails with `net::ERR_EMPTY_RESPONSE`, the usual cause is that no web server is actually listening yet on `localhost:8080`.
+
+Use this sequence before running Playwright:
+
+```bash
+export DEEPGRAM_API_KEY=dummy
+python app.py
+```
+
+Then run the Playwright script against `http://localhost:8080` (or `127.0.0.1:8080`).
+
+Why this helps:
+- The app refuses to start when `DEEPGRAM_API_KEY` is unset.
+- Playwright only captures pages from forwarded ports that already have an active listener.
+
 ## API endpoints
 
 - `GET /api/paragraphs`
@@ -54,7 +72,7 @@ http://localhost:8080
 - `GET /.well-known/agent-card.json`
 - `POST /a2a`
 
-Agent card discovery advertises method-level capabilities for `agent.about` and `pronunciation.evaluate`, including required vs optional params and the JSON-RPC endpoint URL.
+Agent card discovery advertises method-level capabilities for `agent.about`, `paragraphs.count`, `paragraphs.get_text`, and `pronunciation.evaluate`, including required vs optional params and the JSON-RPC endpoint URL.
 
 ### Persistence behavior (`/api/analyze` and `/a2a`)
 
@@ -170,7 +188,24 @@ PY
 )
 ```
 
-3. Submit `pronunciation.evaluate` as an A2A client:
+
+3. Discover paragraph count before selecting ids:
+
+```bash
+curl -s -X POST "$BASE_URL/a2a" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"p-count","method":"paragraphs.count","params":{}}' | jq .
+```
+
+4. Fetch plain paragraph text (unannotated) for the selected id:
+
+```bash
+curl -s -X POST "$BASE_URL/a2a" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"p-text-3","method":"paragraphs.get_text","params":{"paragraph_id":3}}' | jq .
+```
+
+5. Submit `pronunciation.evaluate` as an A2A client:
 
 ```bash
 jq -n --arg audio "$AUDIO_B64" '{jsonrpc:"2.0",id:"p3-a2a-demo",method:"pronunciation.evaluate",params:{paragraph_id:3,audio_wav_base64:$audio}}' \
