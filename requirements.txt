@@ -1,10 +1,9 @@
 flask
-python-dotenv
+pocketsphinx
+cmudict
 requests
 rcssmin
 rjsmin
 gunicorn
 gevent
-pocketsphinx
 pytest
-cmudict

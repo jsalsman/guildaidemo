@@ -779,12 +779,27 @@ def healthz():
 def _agent_card() -> dict[str, Any]:
     """Build static-ish A2A agent capability metadata."""
     base_url = request.host_url.rstrip("/")
+    rpc_endpoint = f"{base_url}/a2a"
     return {
         "name": "Syllable Stress Evaluator",
         "description": "Evaluates noun/verb stress-shift pronunciation from WAV audio and paragraph context.",
         "version": "0.1.0",
         "protocolVersion": "0.1",
         "url": base_url,
+        "documentationUrl": f"{base_url}/",
+        "capabilities": {
+            "jsonrpcEndpoint": rpc_endpoint,
+            "methods": {
+                "agent.about": {
+                    "description": "Return model card metadata and runtime request_id.",
+                },
+                "pronunciation.evaluate": {
+                    "description": "Evaluate a 16kHz mono WAV against paragraph_id or paragraph_text.",
+                    "requiredParams": ["audio_wav_base64"],
+                    "optionalParams": ["paragraph_id", "paragraph_text", "native_exemplar"],
+                },
+            },
+        },
         "skills": [
             {
                 "name": "pronunciation.evaluate",

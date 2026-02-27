@@ -54,6 +54,8 @@ http://localhost:8080
 - `GET /.well-known/agent-card.json`
 - `POST /a2a`
 
+Agent card discovery advertises method-level capabilities for `agent.about` and `pronunciation.evaluate`, including required vs optional params and the JSON-RPC endpoint URL.
+
 ### Persistence behavior (`/api/analyze` and `/a2a`)
 
 For each successful analysis, the app writes two files synchronously into `BUCKET_DIR`: `{recording_id}.wav` (original uploaded WAV bytes) and `{recording_id}.json` (analysis sidecar). The `recording_id` is a microsecond-resolution timestamp string. Example:
@@ -148,6 +150,34 @@ Target output now includes debug fields:
 - `duration_ratio_log`
 - `learned_threshold` (nullable)
 - `threshold_key` (nullable)
+
+### A2A JSON-RPC quickstart (paragraph 3 WAV fixture)
+
+1. Read the discoverable model card:
+
+```bash
+curl -s "$BASE_URL/.well-known/agent-card.json" | jq .
+```
+
+2. Build base64 payload from the paragraph 3 WAV fixture:
+
+```bash
+AUDIO_B64=$(python - <<'PY'
+import base64
+from pathlib import Path
+print(base64.b64encode(Path("tests/abc340c7-fc39-41f0-b1a6-3557f83b7707.wav").read_bytes()).decode())
+PY
+)
+```
+
+3. Submit `pronunciation.evaluate` as an A2A client:
+
+```bash
+jq -n --arg audio "$AUDIO_B64" '{jsonrpc:"2.0",id:"p3-a2a-demo",method:"pronunciation.evaluate",params:{paragraph_id:3,audio_wav_base64:$audio}}' \
+| curl -s -X POST "$BASE_URL/a2a" \
+    -H "Content-Type: application/json" \
+    -d @- | jq .
+```
 
 ## Manual validation flow
 

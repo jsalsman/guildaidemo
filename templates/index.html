@@ -60,32 +60,39 @@
       <h3>Example request: pronunciation.evaluate</h3>
       <pre>{
   "jsonrpc": "2.0",
-  "id": 1,
+  "id": "p3-a2a-demo",
   "method": "pronunciation.evaluate",
   "params": {
-    "paragraph_id": 1,
+    "paragraph_id": 3,
     "audio_wav_base64": "BASE64_16KHZ_MONO_WAV",
-    "client_metadata": {"source": "demo"}
+    "native_exemplar": false
   }
 }</pre>
-      <h3>Example response</h3>
+      <h3>Example response (truncated)</h3>
       <pre>{
   "jsonrpc": "2.0",
-  "id": 1,
+  "id": "p3-a2a-demo",
   "result": {
     "request_id": "...",
     "analysis": {
-      "deepgram_words": [],
-      "alignment": [],
-      "targets": [],
-      "score_summary": {}
+      "deepgram_words": [{"word": "record", "confidence": 0.97}],
+      "alignment": [{"ref_token": "record", "hyp_word": "record"}],
+      "targets": [{"word": "record", "status": "ok"}],
+      "score_summary": {"percent_correct": 100.0, "total_targets": 7}
+    },
+    "persistence": {
+      "recording_id": "YYMMDDHHMMSSffffff",
+      "wav_path": "/bucket/YYMMDDHHMMSSffffff.wav",
+      "json_path": "/bucket/YYMMDDHHMMSSffffff.json"
     }
   }
 }</pre>
-      <h3>Example curl</h3>
+      <h3>Example curl: model card discovery</h3>
+      <pre>curl -s "$BASE_URL/.well-known/agent-card.json" | jq .</pre>
+      <h3>Example curl: paragraph 3 evaluation</h3>
       <pre>curl -X POST "$BASE_URL/a2a" \
   -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"agent.about","params":{}}'</pre>
+  -d '{"jsonrpc":"2.0","id":"p3-a2a-demo","method":"pronunciation.evaluate","params":{"paragraph_id":3,"audio_wav_base64":"BASE64_16KHZ_MONO_WAV"}}'</pre>
     </section>
   </main>
 

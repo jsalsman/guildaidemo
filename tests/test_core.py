@@ -1,7 +1,19 @@
+import base64
 import json
 from pathlib import Path
 
-from app import PRONUNCIATIONS, app, confidence_cubed, needleman_wunsch_alignment, normalize_bg, parse_paragraphs
+from app import (
+    PRONUNCIATIONS,
+    _load_adaptive_thresholds,
+    _THRESHOLD_CACHE,
+    app,
+    confidence_cubed,
+    get_learned_threshold,
+    infer_stress_from_word,
+    needleman_wunsch_alignment,
+    normalize_bg,
+    parse_paragraphs,
+)
 
 
 def test_parse_targets_extracts_markers():
@@ -125,3 +137,120 @@ def test_api_analyze_persists_hst_sidecar_and_wav_for_paragraph3_fixture(monkeyp
     assert sidecar["audio"]["bytes"] == len(wav_bytes)
     assert sidecar["targets"][0]["word_norm"] == "record"
     assert sidecar["targets"][0]["duration_ratio"] == 1.5
+
+
+def test_threshold_learning_builds_median_midpoint(tmp_path):
+    sidecars = [
+        {"native_exemplar": True, "paragraph_id": 1, "targets": [
+            {"status": "ok", "word_norm": "record", "token_index": 2, "expected_stress": 1, "duration_ratio_log": 0.6, "core_durations": {"syll1": 0.12, "syll2": 0.08}},
+            {"status": "ok", "word_norm": "record", "token_index": 2, "expected_stress": 1, "duration_ratio_log": 0.4, "core_durations": {"syll1": 0.11, "syll2": 0.09}},
+            {"status": "ok", "word_norm": "record", "token_index": 2, "expected_stress": 2, "duration_ratio_log": -0.5, "core_durations": {"syll1": 0.08, "syll2": 0.12}},
+            {"status": "ok", "word_norm": "record", "token_index": 2, "expected_stress": 2, "duration_ratio_log": -0.3, "core_durations": {"syll1": 0.09, "syll2": 0.11}},
+        ]},
+    ]
+    for i, data in enumerate(sidecars):
+        (tmp_path / f"{i}.json").write_text(json.dumps(data), encoding="utf-8")
+
+    thresholds = _load_adaptive_thresholds(str(tmp_path))
+    assert thresholds["word:record"]["threshold"] == 0.05
+    assert thresholds["ctx:record:1:2"]["threshold"] == 0.05
+    assert thresholds["word:record"]["class1_count"] == 2
+    assert thresholds["word:record"]["class2_count"] == 2
+
+
+def test_threshold_learning_falls_back_when_insufficient_exemplars(tmp_path):
+    data = {
+        "native_exemplar": True,
+        "targets": [
+            {"status": "ok", "word_norm": "record", "expected_stress": 1, "duration_ratio_log": 0.5, "core_durations": {"syll1": 0.11, "syll2": 0.08}},
+            {"status": "ok", "word_norm": "record", "expected_stress": 2, "duration_ratio_log": -0.5, "core_durations": {"syll1": 0.08, "syll2": 0.11}},
+        ],
+    }
+    (tmp_path / "one.json").write_text(json.dumps(data), encoding="utf-8")
+    thresholds = _load_adaptive_thresholds(str(tmp_path))
+    assert "word:record" not in thresholds
+
+
+def test_infer_stress_uses_learned_threshold(monkeypatch, tmp_path):
+    (tmp_path / "broken.json").write_text("{not-json", encoding="utf-8")
+    trained = {
+        "native_exemplar": True,
+        "paragraph_id": 3,
+        "targets": [
+            {"status": "ok", "word_norm": "record", "token_index": 1, "expected_stress": 1, "duration_ratio_log": 0.6, "core_durations": {"syll1": 0.12, "syll2": 0.08}},
+            {"status": "ok", "word_norm": "record", "token_index": 1, "expected_stress": 1, "duration_ratio_log": 0.5, "core_durations": {"syll1": 0.12, "syll2": 0.08}},
+            {"status": "ok", "word_norm": "record", "token_index": 1, "expected_stress": 2, "duration_ratio_log": -0.6, "core_durations": {"syll1": 0.08, "syll2": 0.12}},
+            {"status": "ok", "word_norm": "record", "token_index": 1, "expected_stress": 2, "duration_ratio_log": -0.5, "core_durations": {"syll1": 0.08, "syll2": 0.12}},
+        ],
+    }
+    (tmp_path / "trained.json").write_text(json.dumps(trained), encoding="utf-8")
+
+    monkeypatch.setattr("app.BUCKET_DIR", str(tmp_path))
+    _THRESHOLD_CACHE.update({"loaded_at": 0.0, "bucket_dir": None, "thresholds": {}})
+
+    phones = [
+        {"phone": "R", "start": 0.00, "end": 0.01},
+        {"phone": "EH", "start": 0.01, "end": 0.08},
+        {"phone": "K", "start": 0.08, "end": 0.09},
+        {"phone": "ER", "start": 0.09, "end": 0.14},
+    ]
+    result = infer_stress_from_word("record", phones, paragraph_id=3, token_index=1)
+    assert result["decision_method"] == "learned_threshold"
+    assert result["learned_threshold"] == 0.0
+    assert result["threshold_key"] == "ctx:record:3:1"
+    assert result["inferred_stress"] == 1
+
+
+def test_malformed_json_ignored_for_threshold_cache(monkeypatch, tmp_path):
+    (tmp_path / "bad.json").write_text("}", encoding="utf-8")
+    monkeypatch.setattr("app.BUCKET_DIR", str(tmp_path))
+    _THRESHOLD_CACHE.update({"loaded_at": 0.0, "bucket_dir": None, "thresholds": {}})
+    assert get_learned_threshold("record") is None
+
+
+def test_a2a_client_can_read_model_card_and_submit_paragraph3_wav(monkeypatch):
+    def fake_analyze_payload(paragraph, wav_bytes):
+        return {
+            "deepgram_words": [{"word": "record", "start": 0.1, "end": 0.4, "confidence": 0.97, "confidence_cubed": 0.912673}],
+            "alignment": [{"ref_index": 1, "hyp_index": 0}],
+            "targets": [{"word": "record", "status": "ok", "expected_stress": 1, "inferred_stress": 1, "correct": True}],
+            "score_summary": {"percent_correct": 100.0, "total_targets": 7, "scored_targets": 7, "missing_targets": 0, "unaligned_targets": 0},
+            "render_words": [],
+        }
+
+    def fake_persist_submission(**kwargs):
+        return {
+            "recording_id": "260227123456000001",
+            "wav_path": "/bucket/260227123456000001.wav",
+            "json_path": "/bucket/260227123456000001.json",
+        }
+
+    monkeypatch.setattr("app.analyze_payload", fake_analyze_payload)
+    monkeypatch.setattr("app.persist_submission", fake_persist_submission)
+
+    client = app.test_client()
+
+    card_resp = client.get("/.well-known/agent-card.json")
+    assert card_resp.status_code == 200
+    card = card_resp.get_json()
+    assert card["skills"][0]["name"] == "pronunciation.evaluate"
+    assert card["capabilities"]["methods"]["pronunciation.evaluate"]["requiredParams"] == ["audio_wav_base64"]
+
+    wav_path = Path(__file__).parent / "abc340c7-fc39-41f0-b1a6-3557f83b7707.wav"
+    audio_b64 = base64.b64encode(wav_path.read_bytes()).decode("ascii")
+
+    rpc_resp = client.post(
+        "/a2a",
+        json={
+            "jsonrpc": "2.0",
+            "id": "p3-a2a-test",
+            "method": "pronunciation.evaluate",
+            "params": {"paragraph_id": 3, "audio_wav_base64": audio_b64},
+        },
+    )
+    assert rpc_resp.status_code == 200
+    rpc = rpc_resp.get_json()
+    assert rpc["jsonrpc"] == "2.0"
+    assert rpc["id"] == "p3-a2a-test"
+    assert rpc["result"]["analysis"]["score_summary"]["percent_correct"] == 100.0
+    assert rpc["result"]["persistence"]["recording_id"] == "260227123456000001"
