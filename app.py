@@ -6,13 +6,17 @@ or syllable 2 for each target.
 """
 
 import base64
+import hashlib
 import io
 import json
+import math
 import os
 import re
 import uuid
 import wave
 from dataclasses import dataclass
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from typing import Any
 
 import cmudict
@@ -29,6 +33,9 @@ VOWEL_BASES = {
     "AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY", "OW", "OY", "UH", "UW"
 }
 MAX_WORD_PAD_SEC = 0.12
+BUCKET_DIR = os.environ.get("BUCKET_DIR", "/bucket")
+HST_TZ = ZoneInfo("Pacific/Honolulu")
+RATIO_EPS = 1e-4
 
 
 app = Flask(__name__)
@@ -65,6 +72,123 @@ def normalize_bg(value: float | None) -> float:
     if value is None:
         return 0.0
     return max(0.0, min(1.0, value))
+
+
+def parse_bool(value: Any) -> bool:
+    """Parse a boolean-ish value from form/json payloads."""
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _ratio_metrics(d1: float | None, d2: float | None) -> tuple[float | None, float | None]:
+    """Compute duration ratio features for threshold aggregation."""
+    if d1 is None or d2 is None:
+        return None, None
+    if d2 <= 0:
+        return None, None
+    ratio = d1 / d2
+    ratio_log = math.log((d1 + RATIO_EPS) / (d2 + RATIO_EPS))
+    return round(ratio, 6), round(ratio_log, 6)
+
+
+def _recording_id_hst() -> tuple[str, str]:
+    """Build a microsecond recording id and ISO timestamp in HST."""
+    now_hst = datetime.now(HST_TZ)
+    return now_hst.strftime("%y%m%d%H%M%S%f"), now_hst.isoformat(timespec="microseconds")
+
+
+def persist_submission(
+    *,
+    wav_bytes: bytes,
+    paragraph: dict[str, Any],
+    paragraph_id: int | None,
+    analysis: dict[str, Any],
+    native_exemplar: bool,
+    source: str,
+) -> dict[str, Any]:
+    """Persist WAV and sidecar JSON into the mounted bucket directory."""
+    recording_id, created_at_hst = _recording_id_hst()
+    os.makedirs(BUCKET_DIR, exist_ok=True)
+    wav_path = os.path.join(BUCKET_DIR, f"{recording_id}.wav")
+    json_path = os.path.join(BUCKET_DIR, f"{recording_id}.json")
+    tmp_json_path = f"{json_path}.tmp"
+
+    with open(wav_path, "wb") as wf:
+        wf.write(wav_bytes)
+        wf.flush()
+        os.fsync(wf.fileno())
+
+    paragraph_text = paragraph.get("display_text", "")
+    paragraph_hash = hashlib.sha256(paragraph_text.encode("utf-8")).hexdigest() if paragraph_text else None
+    targets = []
+    for target in analysis.get("targets", []):
+        d1 = target.get("core_durations", {}).get("syll1")
+        d2 = target.get("core_durations", {}).get("syll2")
+        ratio, ratio_log = _ratio_metrics(d1, d2)
+        targets.append(
+            {
+                "token_index": target.get("token_index"),
+                "word_display": target.get("word"),
+                "word_norm": normalize_token(target.get("word", "")),
+                "label": target.get("label"),
+                "expected_stress": target.get("expected_stress"),
+                "inferred_stress": target.get("inferred_stress"),
+                "status": target.get("status"),
+                "correct": target.get("correct"),
+                "core_phones": target.get("core_phones"),
+                "core_durations": target.get("core_durations"),
+                "duration_ratio": ratio,
+                "duration_ratio_log": ratio_log,
+                "deepgram_word_index": target.get("deepgram_word_index"),
+                "deepgram_confidence": target.get("deepgram_confidence"),
+                "deepgram_confidence_cubed": target.get("deepgram_confidence_cubed"),
+                "feedback": target.get("feedback"),
+            }
+        )
+
+    sidecar = {
+        "schema_version": 1,
+        "recording_id": recording_id,
+        "created_at_hst": created_at_hst,
+        "timezone": "Pacific/Honolulu",
+        "source": source,
+        "request_id": getattr(g, "request_id", None),
+        "request_ip": getattr(g, "client_ip", None),
+        "paragraph_id": paragraph_id,
+        "paragraph_text_hash": f"sha256:{paragraph_hash}" if paragraph_hash else None,
+        "native_exemplar": native_exemplar,
+        "audio": {
+            "path": wav_path,
+            "bytes": len(wav_bytes),
+            "content_type": "audio/wav",
+            "sample_rate_hz": 16000,
+            "channels": 1,
+            "sample_width_bytes": 2,
+        },
+        "analysis_summary": analysis.get("score_summary", {}),
+        "targets": targets,
+        "pipeline": {
+            "asr_provider": "deepgram",
+            "asr_model": "nova-2",
+            "aligner": "pocketsphinx",
+        },
+    }
+
+    with open(tmp_json_path, "w", encoding="utf-8") as jf:
+        json.dump(sidecar, jf, ensure_ascii=False, indent=2)
+        jf.write("\n")
+        jf.flush()
+        os.fsync(jf.fileno())
+    os.replace(tmp_json_path, json_path)
+
+    return {
+        "recording_id": recording_id,
+        "wav_path": wav_path,
+        "json_path": json_path,
+    }
 
 
 def parse_paragraphs(text: str) -> list[dict[str, Any]]:
@@ -443,6 +567,15 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, An
     }
 
 
+
+
+def get_client_ip() -> str | None:
+    """Resolve client IP from Cloud Run proxy headers when available."""
+    forwarded_for = request.headers.get("X-Forwarded-For", "").strip()
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip() or None
+    return request.remote_addr
+
 def get_request_id() -> str:
     """Use inbound request id when available; otherwise generate one."""
     header = request.headers.get("X-Request-Id", "").strip()
@@ -451,8 +584,9 @@ def get_request_id() -> str:
 
 @app.before_request
 def attach_request_id() -> None:
-    """Attach a request id to flask.g before each request is handled."""
+    """Attach request context fields to flask.g before request handling."""
     g.request_id = get_request_id()
+    g.client_ip = get_client_ip()
 
 
 @app.after_request
@@ -521,11 +655,21 @@ def api_analyze():
         return jsonify({"request_id": g.request_id, "error": "paragraph_id must be 1..5"}), 400
     if not audio:
         return jsonify({"request_id": g.request_id, "error": "audio_wav is required"}), 400
+    native_exemplar = parse_bool(request.form.get("native_exemplar"))
 
     wav_bytes = audio.read()
     try:
         analysis = analyze_payload(PARAGRAPHS[paragraph_id - 1], wav_bytes)
+        persisted = persist_submission(
+            wav_bytes=wav_bytes,
+            paragraph=PARAGRAPHS[paragraph_id - 1],
+            paragraph_id=paragraph_id,
+            analysis=analysis,
+            native_exemplar=native_exemplar,
+            source="web",
+        )
         analysis["request_id"] = g.request_id
+        analysis["persistence"] = persisted
         log(f"analyze completed paragraph_id={paragraph_id} words={len(analysis['deepgram_words'])}")
         return jsonify(analysis)
     except Exception as exc:
@@ -557,6 +701,7 @@ def a2a():
         p_id = params.get("paragraph_id")
         p_text = params.get("paragraph_text")
         b64 = params.get("audio_wav_base64")
+        native_exemplar = parse_bool(params.get("native_exemplar"))
         if not b64:
             return rpc_err(-32602, "audio_wav_base64 is required")
         if not p_id and not p_text:
@@ -577,7 +722,19 @@ def a2a():
         try:
             analysis = analyze_payload(paragraph, wav_bytes)
             analysis.pop("render_words", None)
-            return jsonify({"jsonrpc": "2.0", "id": rpc_id, "result": {"request_id": g.request_id, "analysis": analysis}})
+            persisted = persist_submission(
+                wav_bytes=wav_bytes,
+                paragraph=paragraph,
+                paragraph_id=p_id if isinstance(p_id, int) else None,
+                analysis=analysis,
+                native_exemplar=native_exemplar,
+                source="a2a",
+            )
+            return jsonify({
+                "jsonrpc": "2.0",
+                "id": rpc_id,
+                "result": {"request_id": g.request_id, "analysis": analysis, "persistence": persisted},
+            })
         except Exception as exc:
             log(f"a2a eval failed: {exc}")
             return rpc_err(-32000, str(exc), status=500)

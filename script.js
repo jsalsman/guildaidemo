@@ -22,6 +22,7 @@ const renderedParagraph = document.getElementById('renderedParagraph');
 const targetsTableBody = document.querySelector('#targetsTable tbody');
 const scoreSummary = document.getElementById('scoreSummary');
 const recordingPlayback = document.getElementById('recordingPlayback');
+const nativeExemplar = document.getElementById('nativeExemplar');
 const docsRequestIdEl = document.getElementById('docsRequestId');
 const analysisOverlay = document.getElementById('analysisOverlay');
 
@@ -241,6 +242,7 @@ async function submitAnalysis() {
   const form = new FormData();
   form.append('paragraph_id', String(selectedParagraphId));
   form.append('audio_wav', recordingBlob, 'recording.wav');
+  form.append('native_exemplar', nativeExemplar && nativeExemplar.checked ? 'true' : 'false');
 
   setAnalysisOverlayVisible(true);
   submitBtn.disabled = true;
