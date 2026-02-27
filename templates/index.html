@@ -19,7 +19,7 @@
   <link rel="icon" href="/static/favicon.ico" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Slab:wght@400;700&family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.min.css" />
 </head>
 <body>
@@ -28,7 +28,7 @@
   </div>
   <main class="container">
     <h1>Syllable Stress Assessment Agent</h1>
-    <p>Read a paragraph aloud to evaluate your noun and verb word stress pronunciation.</p>
+    <p class="intro-text">Read a paragraph aloud to evaluate your noun and verb word stress pronunciation.</p>
 
     <section class="card controls">
       <div class="selection-row">
@@ -184,6 +184,8 @@
       <p id="deepgramKeyStatus" class="byo-key-status">Using shared API key</p>
     </section>
   </main>
+
+  <footer class="site-footer">by <a href="https://linkedin.com/in/jsalsman" target="_blank" rel="noopener noreferrer">Jim Salsman</a>, February 2026.</footer>
 
   <div id="analysisOverlay" class="analysis-overlay" aria-live="polite" aria-label="Analysis in progress" aria-hidden="true">
     <img src="/static/loading.gif" alt="Analyzing submission" width="100" height="100" />

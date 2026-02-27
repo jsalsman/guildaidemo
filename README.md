@@ -1,5 +1,12 @@
 # syllable-stress
 
+[![Try it on Google Cloud Run](https://img.shields.io/badge/Try_it_on_Google_Cloud_Run-darkgreen)](https://guildaidemo.talknicer.com/)
+[![Python Version](https://img.shields.io/badge/python-3.13-blue?logo=python)](https://www.python.org/downloads/)
+[![Flask](https://img.shields.io/badge/Flask-3.1-black?logo=flask)](https://flask.palletsprojects.com/)
+[![A2A Compatible](https://img.shields.io/badge/A2A-compatible-purple)](https://a2aprotocol.ai/)
+[![MIT License](https://img.shields.io/badge/License-MIT-green)](https://opensource.org/licenses/MIT)
+[![Donate](https://img.shields.io/badge/Donate-gold?logo=paypal)](https://paypal.me/jsalsman)
+
 Single-page EFL pronunciation evaluator for noun/verb stress-shift pairs, with A2A-compatible discovery + JSON-RPC endpoints.
 
 Try it: https://guildaidemo.talknicer.com
