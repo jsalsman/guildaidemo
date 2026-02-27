@@ -5,17 +5,7 @@ output and phone-level timing to infer whether stress was placed on syllable 1
 or syllable 2 for each target.
 """
 
-import base64
-import hashlib
-import io
-import json
-import math
-import os
-import re
-import statistics
-import time
-import uuid
-import wave
+import base64, hashlib, io, json, math, os, re, statistics, sys, time, uuid, wave
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -88,7 +78,7 @@ def _track_timing(metric: str, elapsed_sec: float) -> None:
 def log(message: str) -> None:
     """Print request-scoped logs with a request id for easier traceability."""
     rid = getattr(g, "request_id", "-")
-    print(f"[request_id={rid}] {message}", flush=True)
+    print(f"[request_id={rid}] {message}", file=sys.stderr, flush=True)
 
 
 def normalize_token(token: str) -> str:
