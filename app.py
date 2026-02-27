@@ -735,11 +735,11 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, An
     render_words = build_render_words(paragraph["display_text"], alignment, deepgram_words, paragraph["targets"], targets_out)
 
     timing = {
-        "recording_duration_sec": round(duration, 2),
-        "bucket_json_read_process_sec": round(float(getattr(g, "timings", {}).get("bucket_json_read_process_sec", 0.0)), 2),
-        "deepgram_api_sec": round(deepgram_elapsed, 2),
-        "pocketsphinx_alignment_sec": round(alignment_total, 2),
-        "persist_output_files_sec": round(float(getattr(g, "timings", {}).get("persist_output_files_sec", 0.0)), 2),
+        "recording_duration_sec": round(duration, 3),
+        "bucket_json_read_process_sec": round(float(getattr(g, "timings", {}).get("bucket_json_read_process_sec", 0.0)), 3),
+        "deepgram_api_sec": round(deepgram_elapsed, 3),
+        "pocketsphinx_alignment_sec": round(alignment_total, 3),
+        "persist_output_files_sec": round(float(getattr(g, "timings", {}).get("persist_output_files_sec", 0.0)), 3),
     }
 
     return {
@@ -886,7 +886,7 @@ def api_analyze():
             source="web",
         )
         analysis.setdefault("timing", {})["persist_output_files_sec"] = round(
-            float(getattr(g, "timings", {}).get("persist_output_files_sec", 0.0)), 2
+            float(getattr(g, "timings", {}).get("persist_output_files_sec", 0.0)), 3
         )
         analysis["request_id"] = g.request_id
         analysis["persistence"] = persisted
@@ -974,7 +974,7 @@ def a2a():
                 source="a2a",
             )
             analysis.setdefault("timing", {})["persist_output_files_sec"] = round(
-                float(getattr(g, "timings", {}).get("persist_output_files_sec", 0.0)), 2
+                float(getattr(g, "timings", {}).get("persist_output_files_sec", 0.0)), 3
             )
             return jsonify({
                 "jsonrpc": "2.0",

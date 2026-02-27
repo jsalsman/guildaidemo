@@ -45,25 +45,6 @@ export BUCKET_DIR=/bucket
 ```text
 http://localhost:8080
 ```
-
-
-### Playwright screenshot troubleshooting
-
-If `mcp__browser_tools__run_playwright_script` fails with `net::ERR_EMPTY_RESPONSE`, the usual cause is that no web server is actually listening yet on `localhost:8080`.
-
-Use this sequence before running Playwright:
-
-```bash
-export DEEPGRAM_API_KEY=dummy
-python app.py
-```
-
-Then run the Playwright script against `http://localhost:8080` (or `127.0.0.1:8080`).
-
-Why this helps:
-- The app refuses to start when `DEEPGRAM_API_KEY` is unset.
-- Playwright only captures pages from forwarded ports that already have an active listener.
-
 ## API endpoints
 
 - `GET /api/paragraphs`

@@ -213,8 +213,8 @@ function formatDuration(value) {
 
 function formatSeconds(value) {
   const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return '0.00';
-  return numeric.toFixed(2);
+  if (!Number.isFinite(numeric)) return '0.000';
+  return numeric.toFixed(3);
 }
 
 function formatCoreDurationsWithThreshold(target) {
@@ -290,7 +290,12 @@ function renderResults(data) {
 
   if (timingSummary) {
     const timing = data.timing || {};
-    timingSummary.textContent = `Timing (s): recording ${formatSeconds(timing.recording_duration_sec)}, bucket JSON read/process ${formatSeconds(timing.bucket_json_read_process_sec)}, Deepgram API ${formatSeconds(timing.deepgram_api_sec)}, PocketSphinx alignment ${formatSeconds(timing.pocketsphinx_alignment_sec)}, persisted files ${formatSeconds(timing.persist_output_files_sec)}`;
+    const totalProcessingTimeSec =
+      Number(timing.bucket_json_read_process_sec || 0) +
+      Number(timing.deepgram_api_sec || 0) +
+      Number(timing.pocketsphinx_alignment_sec || 0) +
+      Number(timing.persist_output_files_sec || 0);
+    timingSummary.textContent = `Elapsed time: recording ${formatSeconds(timing.recording_duration_sec)}, read and process exemplar bucket files ${formatSeconds(timing.bucket_json_read_process_sec)}, Deepgram STT ${formatSeconds(timing.deepgram_api_sec)}, PocketSphinx alignment ${formatSeconds(timing.pocketsphinx_alignment_sec)}, writing bucket files ${formatSeconds(timing.persist_output_files_sec)}; total processing time: ${formatSeconds(totalProcessingTimeSec)} seconds`;
   }
 }
 
