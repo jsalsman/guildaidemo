@@ -8,6 +8,8 @@ let isRecording = false;
 let recordingBlob = null;
 let stopTimer = null;
 let workletNode = null;
+// Hard stop for a single capture. Keeps accidental long recordings from
+// producing very large uploads and long server-side processing times.
 const MAX_SECONDS = 120;
 
 const paragraphOptions = document.getElementById('paragraphOptions');
@@ -25,6 +27,8 @@ const nativeExemplar = document.getElementById('nativeExemplar');
 const docsRequestIdEl = document.getElementById('docsRequestId');
 const analysisOverlay = document.getElementById('analysisOverlay');
 
+// Convert normalized WebAudio samples (Float32 in [-1, 1]) to signed 16-bit PCM,
+// which matches the backend WAV expectations (16 kHz, mono, 16-bit).
 function to16BitPCM(float32Array) {
   const output = new Int16Array(float32Array.length);
   for (let i = 0; i < float32Array.length; i++) {
@@ -34,6 +38,8 @@ function to16BitPCM(float32Array) {
   return output;
 }
 
+// Build a minimal RIFF/WAV container around PCM samples so the blob can be
+// uploaded directly to /api/analyze without additional transcoding.
 function encodeWav(samples, sampleRate = 16000, channels = 1) {
   const bytesPerSample = 2;
   const blockAlign = channels * bytesPerSample;
@@ -109,6 +115,8 @@ function renderParagraphText() {
 }
 
 async function setupAudioWorklet() {
+  // Define worklet inline so this app can remain a single-page static bundle
+  // without an extra recorder processor file.
   const workletCode = `
     class RecorderWorkletProcessor extends AudioWorkletProcessor {
       process(inputs) {
@@ -130,6 +138,7 @@ async function setupAudioWorklet() {
   }
 
   workletNode = new AudioWorkletNode(audioContext, 'recorder-worklet-processor');
+  // Each message contains one frame of mono float samples from the mic stream.
   workletNode.port.onmessage = (event) => {
     if (!isRecording) return;
     rawAudioData.push(new Float32Array(event.data));
@@ -164,6 +173,7 @@ async function startRecording() {
   recordStatus.textContent = 'Recording in progress...';
   submitBtn.disabled = true;
 
+  // Auto-stop acts as a safety net if the user never clicks stop.
   stopTimer = setTimeout(() => {
     if (isRecording) stopRecording();
   }, MAX_SECONDS * 1000);
@@ -186,6 +196,7 @@ function stopRecording() {
   audioContext = null;
   mediaStream = null;
 
+  // Concatenate captured worklet chunks into one contiguous buffer for WAV encoding.
   const mergedLength = rawAudioData.reduce((sum, chunk) => sum + chunk.length, 0);
   const merged = new Float32Array(mergedLength);
   let offset = 0;
@@ -288,6 +299,8 @@ function renderResults(data) {
     targetsTableBody.appendChild(tr);
   }
 
+  // Client-side total mirrors server timing fields to make perf bottlenecks visible
+  // during manual QA without opening network traces.
   if (timingSummary) {
     const timing = data.timing || {};
     const totalProcessingTimeSec =

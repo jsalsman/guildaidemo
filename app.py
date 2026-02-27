@@ -30,7 +30,9 @@ from flask import Flask, Response, g, has_request_context, jsonify, render_templ
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY")
 if not DEEPGRAM_API_KEY:
     raise RuntimeError("DEEPGRAM_API_KEY is not configured; please add it to the environment")
-# Deepgram endpoint with fixed model/settings for deterministic transcripts.
+# Deepgram endpoint with explicit query params.
+# Keeping model/language/punctuation flags fixed reduces variation between runs,
+# which makes stress-threshold tuning and regression debugging less noisy.
 DEEPGRAM_URL = (
     "https://api.deepgram.com/v1/listen"
     "?model=nova-2&language=en-US&punctuate=false&diarize=false"
@@ -49,7 +51,8 @@ HST_TZ = ZoneInfo("Pacific/Honolulu")
 RATIO_EPS = 1e-4
 # Minimum native-exemplar samples per class (noun/verb) before using learned thresholds.
 MIN_EXEMPLARS_PER_CLASS = 2
-# In-process cache TTL to avoid scanning bucket JSON sidecars on every request.
+# In-process cache TTL for learned thresholds.
+# Sidecar scans can dominate latency, so we trade freshness for predictable read cost.
 THRESHOLD_CACHE_TTL_SEC = 60
 
 
@@ -136,12 +139,14 @@ def _load_adaptive_thresholds(bucket_dir: str) -> dict[str, dict[str, Any]]:
     # Local import keeps module import light and avoids global dependency for tests.
     import glob
 
-    # grouped[key][class] -> list of duration_ratio_log samples.
+    # grouped[key][class] -> list[duration_ratio_log].
+    # class is expected stress (1=noun pattern, 2=verb pattern).
     grouped: dict[str, dict[int, list[float]]] = {}
     # Iterate every persisted sidecar in the mounted bucket.
     for json_path in glob.glob(os.path.join(bucket_dir, "*.json")):
         try:
-            # A malformed or partially-written JSON should never abort loading.
+            # Skip malformed/partial sidecars and continue.
+            # This keeps one bad write from disabling adaptive thresholds globally.
             with open(json_path, "r", encoding="utf-8") as fh:
                 sidecar = json.load(fh)
         except Exception:
@@ -183,7 +188,8 @@ def _load_adaptive_thresholds(bucket_dir: str) -> dict[str, dict[str, Any]]:
                 ctx_key = _threshold_key(word_norm, paragraph_id, token_index)
                 grouped.setdefault(ctx_key, {1: [], 2: []})[expected_stress].append(float(ratio_log))
 
-    # Final learned thresholds keyed by context or word.
+    # Final learned thresholds keyed by context (preferred) and word (fallback).
+    # Threshold is midpoint of class medians in log-ratio space.
     learned: dict[str, dict[str, Any]] = {}
     for key, classes in grouped.items():
         c1 = classes[1]
@@ -217,7 +223,8 @@ def get_learned_threshold(word_norm: str, paragraph_id: int | None = None, token
             _THRESHOLD_CACHE["loaded_at"] = now
             _THRESHOLD_CACHE["bucket_dir"] = BUCKET_DIR
         except Exception as exc:
-            # Hard-fail open: keep service responsive and use naive fallback.
+            # Fail open: preserve request path even if threshold loading fails.
+            # Downstream code falls back to naive duration comparison.
             log(f"adaptive threshold load warning: {exc}")
             _THRESHOLD_CACHE["thresholds"] = {}
             _THRESHOLD_CACHE["loaded_at"] = now
