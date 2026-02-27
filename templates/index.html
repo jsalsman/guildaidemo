@@ -51,7 +51,7 @@
     </section>
 
     <section class="card docs">
-      <h2>Developer / A2A</h2>
+      <h2>Developers: A2A usage</h2>
       <ul>
         <li>Agent Card URL: <a id="agentCardLink" href="/.well-known/agent-card.json"><code>/.well-known/agent-card.json</code></a></li>
         <li>A2A JSON-RPC endpoint: <code>/a2a</code> (methods: <code>agent.about</code>, <code>paragraphs.count</code>, <code>paragraphs.get_text</code>, <code>pronunciation.evaluate</code>)</li>
@@ -59,6 +59,7 @@
         <li>request_id: <code id="docsRequestId">-</code></li>
       </ul>
       <h3>Example request: paragraphs.count</h3>
+      <p>Use this JSON-RPC request to discover how many practice paragraphs are configured. It takes no parameters (an empty <code>params</code> object) and is useful for dynamically building a selector or validating configuration in a client integration. Interpret the result by reading the returned count value to determine the valid paragraph ID range for subsequent calls.</p>
       <pre>{
   "jsonrpc": "2.0",
   "id": "p-count",
@@ -66,6 +67,7 @@
   "params": {}
 }</pre>
       <h3>Example request: paragraphs.get_text</h3>
+      <p>Use this request to fetch a specific paragraph by ID before recording or analysis. The required parameter is <code>paragraph_id</code>, which must be a valid numeric paragraph identifier. Call this when you need the canonical prompt text in a client app, and interpret the response as the exact reference text expected by the evaluator for that paragraph.</p>
       <pre>{
   "jsonrpc": "2.0",
   "id": "p-text-3",
@@ -75,6 +77,7 @@
   }
 }</pre>
       <h3>Example request: pronunciation.evaluate</h3>
+      <p>This is the main scoring request for stress-shift pronunciation analysis. Provide <code>audio_wav_base64</code> (required) with 16 kHz mono WAV audio, plus either <code>paragraph_id</code> or paragraph text context; <code>native_exemplar</code> is optional and can influence output handling. Use this after capturing audio, then interpret the returned analysis fields (alignment, target statuses, and summary score) to determine pronunciation accuracy and feedback.</p>
       <pre>{
   "jsonrpc": "2.0",
   "id": "p3-a2a-demo",
@@ -86,6 +89,7 @@
   }
 }</pre>
       <h3>Example response (truncated)</h3>
+      <p>This sample shows the structure you receive after a successful <code>pronunciation.evaluate</code> call. The <code>analysis</code> block contains transcription confidence, token alignment, per-target status, and aggregate scoring, while <code>persistence</code> contains generated IDs and output file locations. Use this shape to map results into UI components and interpret success by checking both the summary score and individual target statuses.</p>
       <pre>{
   "jsonrpc": "2.0",
   "id": "p3-a2a-demo",
@@ -105,17 +109,21 @@
   }
 }</pre>
       <h3>Example curl: model card discovery</h3>
-      <pre>curl -s "$BASE_URL/.well-known/agent-card.json" | jq .</pre>
+      <p>Run this command to retrieve the Agent Card metadata from the current deployment URL. It takes no request body or custom parameters and is typically used first to confirm capabilities, method names, and endpoint URLs before integrating. Interpret the pretty-printed JSON to verify protocol version, supported methods, and service metadata.</p>
+      <pre>curl -s "{{ base_url }}/.well-known/agent-card.json" | jq .</pre>
       <h3>Example curl: paragraph count</h3>
-      <pre>curl -X POST "$BASE_URL/a2a" \
+      <p>This curl command sends the same <code>paragraphs.count</code> JSON-RPC request from a shell for quick diagnostics. It posts to <code>/a2a</code> with a JSON body and no method-specific params. Use it in scripts, CI health checks, or manual smoke tests, then read the returned count to confirm expected paragraph configuration.</p>
+      <pre>curl -X POST "{{ base_url }}/a2a" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":"p-count","method":"paragraphs.count","params":{}}'</pre>
       <h3>Example curl: plain paragraph text</h3>
-      <pre>curl -X POST "$BASE_URL/a2a" \
+      <p>This command requests canonical prompt text for one paragraph ID using <code>paragraphs.get_text</code>. The key parameter is <code>paragraph_id</code>, and you would use it when preparing reading prompts or validating that a client and server are synchronized on paragraph content. Interpret the response text as the authoritative source for that paragraph.</p>
+      <pre>curl -X POST "{{ base_url }}/a2a" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":"p-text-3","method":"paragraphs.get_text","params":{"paragraph_id":3}}'</pre>
       <h3>Example curl: paragraph 3 evaluation</h3>
-      <pre>curl -X POST "$BASE_URL/a2a" \
+      <p>Use this command-line example to submit audio for full pronunciation scoring against paragraph 3. The required payload field is <code>audio_wav_base64</code>; include paragraph context via <code>paragraph_id</code> (as shown) when evaluating predefined content. Interpret the resulting JSON by examining per-word target statuses and <code>score_summary</code> to assess overall performance.</p>
+      <pre>curl -X POST "{{ base_url }}/a2a" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":"p3-a2a-demo","method":"pronunciation.evaluate","params":{"paragraph_id":3,"audio_wav_base64":"BASE64_16KHZ_MONO_WAV"}}'</pre>
     </section>

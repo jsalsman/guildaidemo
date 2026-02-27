@@ -798,7 +798,7 @@ def add_request_id_header(resp: Response) -> Response:
 @app.route("/")
 def index() -> str:
     """Serve the web UI."""
-    return render_template("index.html")
+    return render_template("index.html", base_url=request.host_url.rstrip("/"))
 
 
 @app.route("/api/paragraphs")
