@@ -12,6 +12,8 @@ import json
 import math
 import os
 import re
+import statistics
+import time
 import uuid
 import wave
 from dataclasses import dataclass
@@ -24,25 +26,43 @@ import requests
 from flask import Flask, Response, g, jsonify, render_template, request
 
 
-DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY", "")
+# Deepgram API key used for outbound ASR requests.
+DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY")
+if not DEEPGRAM_API_KEY:
+    raise RuntimeError("DEEPGRAM_API_KEY is not configured; please add it to the environment")
+# Deepgram endpoint with fixed model/settings for deterministic transcripts.
 DEEPGRAM_URL = (
     "https://api.deepgram.com/v1/listen"
     "?model=nova-2&language=en-US&punctuate=false&diarize=false"
 )
+# ARPAbet vowel phone set used to identify candidate stressed nuclei.
 VOWEL_BASES = {
     "AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY", "OW", "OY", "UH", "UW"
 }
+# Padding around each target-word window during phone alignment.
 MAX_WORD_PAD_SEC = 0.12
+# Bucket directory where WAV/JSON sidecar pairs are persisted and reloaded from.
 BUCKET_DIR = os.environ.get("BUCKET_DIR", "/bucket")
+# Timezone used for recording ids and persisted timestamps.
 HST_TZ = ZoneInfo("Pacific/Honolulu")
+# Small epsilon to stabilize log-ratio computation when durations are very small.
 RATIO_EPS = 1e-4
+# Minimum native-exemplar samples per class (noun/verb) before using learned thresholds.
+MIN_EXEMPLARS_PER_CLASS = 2
+# In-process cache TTL to avoid scanning bucket JSON sidecars on every request.
+THRESHOLD_CACHE_TTL_SEC = 60
 
 
+# Flask application instance for all HTTP and A2A routes.
 app = Flask(__name__)
+# Maximum request payload size (25 MB) to guard upload resource usage.
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
 
+# Lazy-initialized PocketSphinx decoder singleton.
 _DECODER = None
+# Learned-threshold cache keyed by context/word, refreshed on TTL expiry.
+_THRESHOLD_CACHE: dict[str, Any] = {"loaded_at": 0.0, "bucket_dir": None, "thresholds": {}}
 
 
 def log(message: str) -> None:
@@ -92,6 +112,109 @@ def _ratio_metrics(d1: float | None, d2: float | None) -> tuple[float | None, fl
     ratio = d1 / d2
     ratio_log = math.log((d1 + RATIO_EPS) / (d2 + RATIO_EPS))
     return round(ratio, 6), round(ratio_log, 6)
+
+
+def _threshold_key(word_norm: str, paragraph_id: int | None = None, token_index: int | None = None) -> str:
+    """Build a stable key string for learned-threshold lookup."""
+    if paragraph_id is None or token_index is None:
+        return f"word:{word_norm}"
+    return f"ctx:{word_norm}:{paragraph_id}:{token_index}"
+
+
+def _load_adaptive_thresholds(bucket_dir: str) -> dict[str, dict[str, Any]]:
+    """Scan sidecars in bucket and compute median-midpoint stress thresholds."""
+    # Local import keeps module import light and avoids global dependency for tests.
+    import glob
+
+    # grouped[key][class] -> list of duration_ratio_log samples.
+    grouped: dict[str, dict[int, list[float]]] = {}
+    # Iterate every persisted sidecar in the mounted bucket.
+    for json_path in glob.glob(os.path.join(bucket_dir, "*.json")):
+        try:
+            # A malformed or partially-written JSON should never abort loading.
+            with open(json_path, "r", encoding="utf-8") as fh:
+                sidecar = json.load(fh)
+        except Exception:
+            continue
+
+        if not isinstance(sidecar, dict) or sidecar.get("native_exemplar") is not True:
+            continue
+
+        # paragraph_id is optional (e.g., free-text A2A calls), so keep nullable.
+        paragraph_id = sidecar.get("paragraph_id") if isinstance(sidecar.get("paragraph_id"), int) else None
+        # Evaluate each target row as a potential training sample.
+        for target in sidecar.get("targets", []):
+            if not isinstance(target, dict):
+                continue
+            if target.get("status") != "ok":
+                continue
+            expected_stress = target.get("expected_stress")
+            if expected_stress not in (1, 2):
+                continue
+            word_norm = normalize_token(target.get("word_norm") or target.get("word_display") or "")
+            if not word_norm:
+                continue
+
+            d1 = target.get("core_durations", {}).get("syll1") if isinstance(target.get("core_durations"), dict) else None
+            d2 = target.get("core_durations", {}).get("syll2") if isinstance(target.get("core_durations"), dict) else None
+            ratio_log = target.get("duration_ratio_log")
+            if ratio_log is None:
+                _, ratio_log = _ratio_metrics(d1, d2)
+            if ratio_log is None:
+                continue
+
+            # Always collect a word-level key so we can generalize across contexts.
+            word_key = _threshold_key(word_norm)
+            grouped.setdefault(word_key, {1: [], 2: []})[expected_stress].append(float(ratio_log))
+
+            # Also collect context-level key when paragraph/token coordinates are available.
+            token_index = target.get("token_index") if isinstance(target.get("token_index"), int) else None
+            if paragraph_id is not None and token_index is not None:
+                ctx_key = _threshold_key(word_norm, paragraph_id, token_index)
+                grouped.setdefault(ctx_key, {1: [], 2: []})[expected_stress].append(float(ratio_log))
+
+    # Final learned thresholds keyed by context or word.
+    learned: dict[str, dict[str, Any]] = {}
+    for key, classes in grouped.items():
+        c1 = classes[1]
+        c2 = classes[2]
+        if len(c1) < MIN_EXEMPLARS_PER_CLASS or len(c2) < MIN_EXEMPLARS_PER_CLASS:
+            continue
+        threshold = (statistics.median(c1) + statistics.median(c2)) / 2.0
+        learned[key] = {
+            "threshold": round(float(threshold), 6),
+            "class1_count": len(c1),
+            "class2_count": len(c2),
+            "total": len(c1) + len(c2),
+            "key": key,
+        }
+    return learned
+
+
+def get_learned_threshold(word_norm: str, paragraph_id: int | None = None, token_index: int | None = None) -> dict[str, Any] | None:
+    """Get cached learned threshold stats for a word/context when available."""
+    # Monotonic clock avoids issues with wall-clock adjustments.
+    now = time.monotonic()
+    should_reload = (
+        _THRESHOLD_CACHE.get("bucket_dir") != BUCKET_DIR
+        or (now - float(_THRESHOLD_CACHE.get("loaded_at", 0.0))) >= THRESHOLD_CACHE_TTL_SEC
+    )
+    if should_reload:
+        try:
+            # Refresh cache from the bucket directory on TTL expiry/bucket switch.
+            _THRESHOLD_CACHE["thresholds"] = _load_adaptive_thresholds(BUCKET_DIR)
+            _THRESHOLD_CACHE["loaded_at"] = now
+            _THRESHOLD_CACHE["bucket_dir"] = BUCKET_DIR
+        except Exception as exc:
+            # Hard-fail open: keep service responsive and use naive fallback.
+            log(f"adaptive threshold load warning: {exc}")
+            _THRESHOLD_CACHE["thresholds"] = {}
+            _THRESHOLD_CACHE["loaded_at"] = now
+            _THRESHOLD_CACHE["bucket_dir"] = BUCKET_DIR
+
+    thresholds = _THRESHOLD_CACHE.get("thresholds", {})
+    ctx_key = _threshold_key(word_norm, paragraph_id, token_index)
+    return thresholds.get(ctx_key) or thresholds.get(_threshold_key(word_norm))
 
 
 def _recording_id_hst() -> tuple[str, str]:
@@ -226,6 +349,7 @@ def parse_paragraphs(text: str) -> list[dict[str, Any]]:
     return paragraphs
 
 
+# Load canonical practice paragraphs once at import-time for consistent ids/targets.
 with open("5-paragraph-syllable-stress-test_NV.txt", "r", encoding="utf-8") as f:
     PARAGRAPHS = parse_paragraphs(f.read())
 
@@ -253,6 +377,7 @@ def load_pronunciations() -> dict[str, list[list[str]]]:
     return pronunciations
 
 
+# Build a compact pronunciation inventory only for target words in configured paragraphs.
 PRONUNCIATIONS = load_pronunciations()
 
 
@@ -407,8 +532,13 @@ def phoneme_match_score(aligned: list[dict[str, Any]], pronunciation: list[str])
     return sum(1 for i in range(min(len(aligned_seq), len(pron_seq))) if aligned_seq[i] == pron_seq[i])
 
 
-def infer_stress_from_word(word: str, aligned_phones: list[dict[str, Any]]) -> dict[str, Any]:
-    """Infer stress from aligned vowels by comparing first two vowel durations."""
+def infer_stress_from_word(
+    word: str,
+    aligned_phones: list[dict[str, Any]],
+    paragraph_id: int | None = None,
+    token_index: int | None = None,
+) -> dict[str, Any]:
+    """Infer stress using learned thresholds when available, otherwise naive duration."""
     norm = normalize_token(word)
     variants = PRONUNCIATIONS.get(norm, [])
     if not variants or not aligned_phones:
@@ -416,6 +546,10 @@ def infer_stress_from_word(word: str, aligned_phones: list[dict[str, Any]]) -> d
             "inferred_stress": None,
             "core_durations": {"syll1": None, "syll2": None},
             "core_phones": {"syll1": None, "syll2": None},
+            "duration_ratio_log": None,
+            "learned_threshold": None,
+            "threshold_key": None,
+            "decision_method": None,
         }
 
     best = max(variants, key=lambda v: phoneme_match_score(aligned_phones, v))
@@ -425,6 +559,10 @@ def infer_stress_from_word(word: str, aligned_phones: list[dict[str, Any]]) -> d
             "inferred_stress": None,
             "core_durations": {"syll1": None, "syll2": None},
             "core_phones": {"syll1": None, "syll2": None},
+            "duration_ratio_log": None,
+            "learned_threshold": None,
+            "threshold_key": None,
+            "decision_method": None,
         }
 
     syll1_phone = vowel_positions[0][1]
@@ -445,14 +583,30 @@ def infer_stress_from_word(word: str, aligned_phones: list[dict[str, Any]]) -> d
         d2 = round(d2, 2)
 
     inferred = None
+    ratio_log = None
+    learned_threshold = None
+    threshold_key = None
+    decision_method = None
     if d1 is not None and d2 is not None:
-        # Simple duration heuristic: longer nucleus is treated as stressed.
-        inferred = 1 if d1 >= d2 else 2
+        _, ratio_log = _ratio_metrics(d1, d2)
+        threshold_stats = get_learned_threshold(norm, paragraph_id=paragraph_id, token_index=token_index)
+        if threshold_stats and ratio_log is not None:
+            learned_threshold = threshold_stats["threshold"]
+            threshold_key = threshold_stats["key"]
+            inferred = 1 if ratio_log >= learned_threshold else 2
+            decision_method = "learned_threshold"
+        else:
+            inferred = 1 if d1 >= d2 else 2
+            decision_method = "naive_duration"
 
     return {
         "inferred_stress": inferred,
         "core_durations": {"syll1": d1, "syll2": d2},
         "core_phones": {"syll1": syll1_phone, "syll2": syll2_phone},
+        "duration_ratio_log": ratio_log,
+        "learned_threshold": learned_threshold,
+        "threshold_key": threshold_key,
+        "decision_method": decision_method,
     }
 
 
@@ -485,11 +639,14 @@ def build_render_words(display_text: str, alignment: dict[int, int], deepgram_wo
 
 def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, Any]:
     """End-to-end analysis pipeline for a paragraph and uploaded WAV audio."""
+    # 1) ASR transcript with timestamps/confidence per recognized word.
     deepgram_words = deepgram_transcribe(wav_bytes)
+    # 2) Normalize tokens and align paragraph words to ASR words.
     ref_norm = [normalize_token(t) for t in paragraph["tokens"]]
     hyp_norm = [normalize_token(w["word"]) for w in deepgram_words]
     alignment = needleman_wunsch_alignment(ref_norm, hyp_norm)
 
+    # 3) Decode WAV once so target-level slicing can reuse PCM bytes.
     wav_data = read_wav_bytes(wav_bytes)
     duration = len(wav_data.pcm_bytes) / (wav_data.sample_rate * wav_data.channels * wav_data.sample_width)
 
@@ -511,6 +668,10 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, An
             "deepgram_confidence": None,
             "deepgram_confidence_cubed": None,
             "feedback": "Word not matched in transcript. Re-read clearly with target stress.",
+            "decision_method": None,
+            "duration_ratio_log": None,
+            "learned_threshold": None,
+            "threshold_key": None,
         }
         if mapped is None or mapped >= len(deepgram_words):
             targets_out.append(base)
@@ -525,7 +686,7 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, An
         try:
             segment = slice_word_pcm(wav_data, dg["start"], dg["end"], duration)
             phones = align_phonemes(t["word"], segment, dg["start"])
-            inferred = infer_stress_from_word(t["word"], phones)
+            inferred = infer_stress_from_word(t["word"], phones, paragraph_id=paragraph.get("id"), token_index=t.get("token_index"))
             base.update(inferred)
             if inferred["inferred_stress"] is not None:
                 base["status"] = "ok"
@@ -544,6 +705,7 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes) -> dict[str, An
 
         targets_out.append(base)
 
+    # 4) Aggregate scoring metrics for summary and UI.
     scored = [t for t in targets_out if t["status"] == "ok" and t["correct"] is not None]
     missing = [t for t in targets_out if t["status"] == "missing"]
     unaligned = [t for t in targets_out if t["status"] == "unaligned"]
@@ -645,6 +807,7 @@ def agent_card():
 @app.route("/api/analyze", methods=["POST"])
 def api_analyze():
     """Handle multipart form upload and return full stress analysis JSON."""
+    # Parse and validate paragraph id early for fast failure on malformed requests.
     paragraph_raw = request.form.get("paragraph_id", "0")
     try:
         paragraph_id = int(paragraph_raw)
@@ -657,6 +820,7 @@ def api_analyze():
         return jsonify({"request_id": g.request_id, "error": "audio_wav is required"}), 400
     native_exemplar = parse_bool(request.form.get("native_exemplar"))
 
+    # Read full WAV payload and run analysis + persistence in one protected block.
     wav_bytes = audio.read()
     try:
         analysis = analyze_payload(PARAGRAPHS[paragraph_id - 1], wav_bytes)
@@ -680,6 +844,7 @@ def api_analyze():
 @app.route("/a2a", methods=["POST"])
 def a2a():
     """JSON-RPC style endpoint for remote pronunciation evaluation."""
+    # Decode request envelope with permissive defaults to preserve compatibility.
     rpc = request.get_json(silent=True) or {}
     rpc_id = rpc.get("id")
     method = rpc.get("method")

@@ -20,4 +20,4 @@ python -m rjsmin < script.js > static/script.min.js
 python -m rcssmin < styles.css > static/styles.min.css
 
 echo "Starting Flask debug server"
-python -u -m flask --app main run --host=0.0.0.0 -p ${PORT:-8080} --debug
+python -u -m flask --app app run --host=0.0.0.0 -p ${PORT:-8080} --debug

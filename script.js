@@ -1,15 +1,13 @@
 let paragraphs = [];
 let selectedParagraphId = 1;
 let mediaStream = null;
-let mediaRecorder = null;
-let recordedChunks = [];
 let rawAudioData = [];
 let audioContext = null;
-let processor = null;
 let sourceNode = null;
 let isRecording = false;
 let recordingBlob = null;
 let stopTimer = null;
+let workletNode = null;
 const MAX_SECONDS = 120;
 
 const paragraphOptions = document.getElementById('paragraphOptions');
@@ -109,6 +107,38 @@ function renderParagraphText() {
   paragraphText.textContent = p ? p.display_text : '';
 }
 
+async function setupAudioWorklet() {
+  const workletCode = `
+    class RecorderWorkletProcessor extends AudioWorkletProcessor {
+      process(inputs) {
+        const input = inputs[0];
+        if (input && input[0]) {
+          this.port.postMessage(input[0]);
+        }
+        return true;
+      }
+    }
+    registerProcessor('recorder-worklet-processor', RecorderWorkletProcessor);
+  `;
+  const blob = new Blob([workletCode], { type: 'application/javascript' });
+  const url = URL.createObjectURL(blob);
+  try {
+    await audioContext.audioWorklet.addModule(url);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+
+  workletNode = new AudioWorkletNode(audioContext, 'recorder-worklet-processor');
+  workletNode.port.onmessage = (event) => {
+    if (!isRecording) return;
+    rawAudioData.push(new Float32Array(event.data));
+  };
+
+  sourceNode.connect(workletNode);
+  // Connect to destination to keep some browser engines fully active while recording.
+  workletNode.connect(audioContext.destination);
+}
+
 async function startRecording() {
   mediaStream = await navigator.mediaDevices.getUserMedia({
     audio: {
@@ -123,16 +153,9 @@ async function startRecording() {
 
   audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
   sourceNode = audioContext.createMediaStreamSource(mediaStream);
-  processor = audioContext.createScriptProcessor(4096, 1, 1);
   rawAudioData = [];
-  sourceNode.connect(processor);
-  processor.connect(audioContext.destination);
 
-  processor.onaudioprocess = (e) => {
-    if (!isRecording) return;
-    const input = e.inputBuffer.getChannelData(0);
-    rawAudioData.push(new Float32Array(input));
-  };
+  await setupAudioWorklet();
 
   isRecording = true;
   recordBtn.textContent = 'Stop Recording';
@@ -152,10 +175,15 @@ function stopRecording() {
   recordBtn.classList.remove('recording');
   recordStatus.textContent = 'Recording stopped.';
 
-  if (processor) processor.disconnect();
+  if (workletNode) workletNode.disconnect();
   if (sourceNode) sourceNode.disconnect();
   if (audioContext) audioContext.close();
   if (mediaStream) mediaStream.getTracks().forEach((t) => t.stop());
+
+  workletNode = null;
+  sourceNode = null;
+  audioContext = null;
+  mediaStream = null;
 
   const mergedLength = rawAudioData.reduce((sum, chunk) => sum + chunk.length, 0);
   const merged = new Float32Array(mergedLength);
@@ -171,8 +199,6 @@ function stopRecording() {
   recordingPlayback.hidden = false;
 }
 
-
-
 function setAnalysisOverlayVisible(isVisible) {
   if (!analysisOverlay) return;
   analysisOverlay.classList.toggle('is-visible', isVisible);
@@ -182,6 +208,25 @@ function setAnalysisOverlayVisible(isVisible) {
 function formatDuration(value) {
   if (value == null) return '-';
   return Number(value).toFixed(2);
+}
+
+function formatCoreDurationsWithThreshold(target) {
+  const s1 = target?.core_durations?.syll1;
+  const s2 = target?.core_durations?.syll2;
+  const durationText = `s1=${formatDuration(s1)} / s2=${formatDuration(s2)}`;
+
+  if (target?.decision_method === 'learned_threshold' && target.learned_threshold != null) {
+    const thresholdText = Number(target.learned_threshold).toFixed(3);
+    const thresholdKey = target.threshold_key ? ` (${target.threshold_key})` : '';
+    return `${durationText} | threshold=adaptive native_exemplar log(s1/s2)>=${thresholdText}${thresholdKey}`;
+  }
+
+  if (target?.decision_method === 'naive_duration' && s1 != null && s2 != null) {
+    const fallbackSyllable = Number(s1) >= Number(s2) ? 's1' : 's2';
+    return `${durationText} | threshold=fallback longer core vowel (${fallbackSyllable})`;
+  }
+
+  return `${durationText} | threshold=unavailable`;
 }
 
 function renderResults(data) {
@@ -229,7 +274,7 @@ function renderResults(data) {
       <td>${t.label}</td>
       <td>${t.expected_stress ?? '-'}</td>
       <td>${t.inferred_stress ?? '-'}</td>
-      <td>s1=${formatDuration(t.core_durations.syll1)} / s2=${formatDuration(t.core_durations.syll2)}</td>
+      <td>${formatCoreDurationsWithThreshold(t)}</td>
       <td>${t.status}</td>
       <td>${t.feedback}</td>
     `;

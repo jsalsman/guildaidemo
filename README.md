@@ -142,6 +142,28 @@ Each sidecar file contains the following top-level structure:
 
 The sidecar JSON is written with an atomic temp-file-and-rename pattern (`.json.tmp` then `os.replace`) to reduce partial-write risk.
 
+## Adaptive thresholding from native exemplar sidecars
+
+The inference pipeline can learn stress decision thresholds from previously persisted sidecars in `$BUCKET_DIR/*.json`.
+
+- **Data source:** all JSON sidecars in `BUCKET_DIR` (default `/bucket`).
+- **Training filter:** only samples where top-level `native_exemplar` is `true`, target `status` is `"ok"`, `expected_stress` is 1 or 2, and target syllable durations are usable.
+- **Feature:** `duration_ratio_log = ln((syll1 + 1e-4)/(syll2 + 1e-4))`.
+- **Threshold method:** for each key, compute `thr = (median(class1) + median(class2)) / 2` where class1 is expected stress 1 and class2 is expected stress 2.
+- **Keys:**
+  - context key: `(word_norm, paragraph_id, token_index)` when available,
+  - fallback key: `word_norm`.
+- **Minimum data guardrail:** learned thresholds are used only when **both** classes have at least 2 exemplar samples.
+- **Fallback behavior:** if no usable learned threshold exists (or bucket data is empty/corrupt), the app keeps the original heuristic: `syll1 >= syll2 => stress 1 else stress 2`.
+- **Caching:** learned thresholds are cached in-process and refreshed periodically (TTL).
+
+Target output now includes debug fields:
+
+- `decision_method` (`"learned_threshold"` or `"naive_duration"` when inference succeeds)
+- `duration_ratio_log`
+- `learned_threshold` (nullable)
+- `threshold_key` (nullable)
+
 ## Manual validation flow
 
 1. Select a paragraph.
@@ -174,5 +196,5 @@ Included tests cover:
 
 - Keep secrets out of source control.
 - Provide `DEEPGRAM_API_KEY` via environment configuration.
-- `Procfile` is already present for gunicorn start command.
+- `Procfile` is already present for gunicorn start command and uses `app:app` (entry point: `app.py`).
 - Validate locally with `devserver.sh` before deployment.
