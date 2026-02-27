@@ -223,9 +223,96 @@ Included tests cover:
 - confidence-cubed + deterministic background normalization,
 - persistence of HST sidecar+WAV files and schema fields using the paragraph 3 test WAV fixture.
 
-## Cloud Run notes (high-level)
+## Cloud Run notes
 
-- Keep secrets out of source control.
-- Provide `DEEPGRAM_API_KEY` via environment configuration.
+- Provide `DEEPGRAM_API_KEY` via the service environment configuration. Keep secrets out of source control.
 - `Procfile` for Google Cloud Run invocations runs `app.py` as `app:app`.
 - Validate locally with `devserver.sh` before deployment.
+
+## Idea for multi-agent orchistration: WhatsApp Voice Message Bot via n8n
+
+This section describes how to connect the pronunciation evaluator to WhatsApp so users can receive a practice paragraph, record a voice message reply, and get evaluation feedback — all within WhatsApp.
+
+### Architecture overview
+
+A lightweight n8n workflow acts as the orchestrator:
+
+1. A user sends any text message to your WhatsApp number → n8n sends back a random paragraph (e.g., "Please read paragraph 3 aloud and reply with a voice message: ...")
+2. The user replies with a WhatsApp voice message → n8n downloads the OGG/Opus audio
+3. n8n calls a small audio conversion helper to produce a 16 kHz mono WAV
+4. n8n base64-encodes the WAV and POSTs it to this app's `pronunciation.evaluate` A2A endpoint with the paragraph_id parsed from the outbound message text
+5. n8n formats the JSON result into a plain-language summary and sends it back to the user
+
+No server-side session state is required: the paragraph number is embedded in the text message sent to the user and parsed from the Meta webhook payload's conversation context when the voice reply arrives.
+
+### Prerequisites
+
+#### Meta developer account and WhatsApp Business Cloud API
+
+WhatsApp's API is gated by Meta regardless of what orchestration layer you use. You will need:
+
+- A **Meta developer account** at [developers.facebook.com](https://developers.facebook.com)
+- A **Meta Business portfolio** (formerly Business Manager), verified with a real business or individual identity
+- A **WhatsApp Business Cloud API app** created in the Meta developer console, with a verified phone number attached
+
+Meta's verification process typically takes **1–3 business days** for individual/small business accounts, though it can be faster. The WhatsApp Cloud API itself is free at low message volumes (Meta's pricing is per-conversation, with a free tier for developer testing).
+
+n8n's WhatsApp Business Cloud trigger node registers your webhook with Meta automatically using an OAuth token — you do not need to copy webhook URLs manually — but the underlying Meta account and app setup is still required.
+
+#### n8n
+
+Either:
+- **Self-hosted** (recommended for this use case): `docker compose up` with the official n8n Docker image. Self-hosting gives you shell access for audio conversion and no workflow execution limits. Running n8n on Cloud Run or a small GCP VM keeps everything in the same GCP environment as the main app.
+- **n8n Cloud**: easier to start but restricts arbitrary command execution, which affects audio conversion (see below).
+
+### Audio format conversion
+
+WhatsApp voice messages are delivered as OGG/Opus files. The `pronunciation.evaluate` endpoint requires 16 kHz mono WAV. Convert with ffmpeg:
+```bash
+ffmpeg -i input.ogg -ar 16000 -ac 1 -sample_fmt s16 output.wav
+```
+
+On self-hosted n8n you can run this in an Execute Command node. On n8n Cloud, or to keep the conversion cleanly separable, deploy a minimal Cloud Run function that accepts a POST with the OGG bytes and returns WAV bytes. This converter is itself a small A2A-compatible service if you want to expose it as a discoverable agent capability.
+
+### n8n workflow outline
+
+1. **WhatsApp Trigger node** — fires on any incoming WhatsApp message to your business number
+2. **IF node** — branch on message type:
+   - Text message → pick a random paragraph_id, fetch its text via `paragraphs.get_text`, send back "Please read paragraph {N} aloud and reply with a voice message: {text}"
+   - Voice message → proceed to conversion and evaluation
+3. **HTTP Request node** — download the OGG audio from the Media URL in the webhook payload
+4. **Audio conversion** — Execute Command node (self-hosted) or HTTP Request to your conversion microservice
+5. **Code node** — base64-encode the WAV bytes; parse the paragraph_id from the last outbound message text in the webhook context
+6. **HTTP Request node** — POST to `/a2a`:
+```json
+   {
+     "jsonrpc": "2.0",
+     "id": "whatsapp-eval",
+     "method": "pronunciation.evaluate",
+     "params": {
+       "paragraph_id": 3,
+       "audio_wav_base64": "<base64>"
+     }
+   }
+```
+7. **Code node** — format result: extract `score_summary.percent_correct` and per-target feedback strings
+8. **WhatsApp Business Cloud send node** — reply with the formatted summary
+
+### Example summary message
+```
+Results for paragraph 3: 5/7 correct (71%)
+✓ record (verb) — stress correct
+✓ permit (verb) — stress correct
+✗ project (noun) — should be PRO-ject; you stressed pro-JECT
+✗ object (noun) — should be OB-ject; you stressed ob-JECT
+✓ present (verb) — stress correct
+✓ conduct (noun) — stress correct
+✗ increase (noun) — should be IN-crease; you stressed in-CREASE
+```
+
+### Resources
+
+- [Meta WhatsApp Cloud API getting started](https://developers.facebook.com/docs/whatsapp/cloud-api/get-started)
+- [n8n WhatsApp Business Cloud trigger docs](https://docs.n8n.io/integrations/builtin/trigger-nodes/n8n-nodes-base.whatsapptrigger/)
+- [n8n community WhatsApp voice message workflow template](https://n8n.io/workflows/3586-ai-powered-whatsapp-chatbot-for-text-voice-images-and-pdfs-with-memory/)
+- [n8n self-hosting with Docker](https://docs.n8n.io/hosting/installation/docker/)
