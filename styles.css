@@ -181,6 +181,11 @@ pre {
     margin-top: 0;
 }
 
+#resultsSection h2 {
+  margin-top: 0;
+  padding-top: 0;
+}
+
 .github-corner {
   position: fixed;
   top: 0;
