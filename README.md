@@ -1,4 +1,4 @@
-# syllable-stress
+# 
 
 [![Try on Cloud Run](https://img.shields.io/badge/Try_on_Cloud_Run-darkgreen)](https://guildaidemo.talknicer.com/)
 [![Agent health](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fguildaidemo.talknicer.com%2Fapi%2Fhealthz&query=%24.status&label=Agent%20health&color=brightgreen&labelColor=indigo)](https://guildaidemo.talknicer.com/api/healthz)
@@ -340,46 +340,50 @@ Results for paragraph 3: 5/7 correct (71%)
 
 ## Guild.ai proposal draft:
 
-**The Oath**
-The Syllable Stress Assessment Agent is a pronunciation assessment agent for English
-language learners that evaluates whether a speaker correctly stress-shifts noun/verb
-homograph pairs — words like *record*, *project*, and *permit* that change stress
-placement depending on their grammatical role. Its purpose is to give immediate,
-word-level feedback on a specific and commonly mispronounced feature of English that
-most learners never explicitly study. It will be used by EFL students and teachers,
-language learning app developers, and anyone building conversational AI systems that
-need to assess spoken English quality.
+**The Oath:**
+The Native English Speaker Homograph Stress Exemplar Crowdsourcer is an agent that
+recruits native English speakers via Prolific to record themselves reading paragraphs
+containing noun/verb homograph pairs, then submits those recordings to the Syllable
+Stress Assessment Agent as native exemplars. Its purpose is to bootstrap the
+data-driven stress-inference calibration of that backend, bringing threshold accuracy
+from a naive duration heuristic to approximately 95% correct — the practical ceiling
+given natural within-speaker variability. Without sufficient native exemplar data the
+Syllable Stress Assessment Agent falls back to a simple "longer syllable wins" heuristic;
+this agent exists to replace that fallback with statistically grounded, learned
+thresholds for all 69 target homograph pairs.
 
-**The Reagents**
-The agent is implemented in TypeScript and deployed on the Guild platform. It wraps an
-existing A2A-compatible Python backend — already live at guildaidemo.talknicer.com on
-Google Cloud Run — which handles the computationally intensive work: Deepgram Nova-2
-speech-to-text with word-level confidence scores, Needleman-Wunsch sequence alignment,
-and PocketSphinx forced phoneme alignment for syllable nucleus duration inference. The
-TypeScript layer exposes a Guild-native agent card at `/.well-known/agent.json` and a
-JSON-RPC endpoint implementing `pronunciation.evaluate`, `paragraphs.get_text`, and
-`paragraphs.count`, delegating to the Python backend via standard HTTP. Persistence of
-audio recordings and analysis sidecars is handled by the backend using Google Cloud
-Storage.
+**The Reagents:**
+The agent is implemented in TypeScript and deployed on the Guild platform. It depends on
+the Prolific API to create and monitor a study, recruit participants, and retrieve
+completed submission metadata. Each participant is presented with one of ten paragraphs
+covering all 69 target noun/verb homograph pairs as both parts of speech, and records
+themselves reading it aloud via a browser-based interface. Completed audio submissions
+are forwarded to the existing Syllable Stress Assessment Agent — a live A2A-compatible
+Python backend at guildaidemo.talknicer.com on Google Cloud Run — via its
+`pronunciation.evaluate` JSON-RPC endpoint with `native_exemplar: true`, which persists
+each WAV and analysis sidecar to Google Cloud Storage and folds the new data into the
+backend's adaptive threshold computation. Prolific participant fees for approximately 300
+recordings are estimated at $200.
 
-**The Ritual**
-When invoked, the TypeScript agent receives a base64-encoded 16kHz mono WAV and a
-paragraph ID, forwards them to the Python backend's `pronunciation.evaluate` A2A
-endpoint, and returns the structured result: per-word stress evaluations with expected
-vs. inferred stress, syllable duration ratios, confidence scores, and a summary
-percentage. The Python backend pipeline is already fully operational; the TypeScript
-wrapper adds Guild platform integration, agent card discovery, and any auth or
-observability instrumentation the platform requires. This architecture also demonstrates
-a natural multi-agent pattern: a Guild-native orchestrator agent delegating a specialized
-acoustic analysis task to a domain-specific backend agent via A2A.
+**The Ritual:**
+The agent launches a Prolific study presenting participants with an assigned paragraph
+and a recording interface; on submission it forwards the audio to the Syllable Stress
+Assessment Agent's `pronunciation.evaluate` endpoint flagged as a native exemplar. As
+recordings accumulate in GCS, the backend automatically recomputes per-word stress
+decision thresholds from the growing distribution of syllable nucleus duration ratios.
+The agent polls the Prolific API for study progress and queries the backend's convergence
+status after each batch, checking how many of the 69 target words have accumulated
+sufficient exemplars in both noun and verb roles to activate a learned threshold. Once
+all words have converged, the agent closes the Prolific study and emits a final
+convergence report.
 
-**The Proof**
-The agent is working when it correctly identifies stress errors at a rate consistent with
-human listener judgments on the same recordings. Concretely: a set of reference WAV
-recordings with known correct and incorrect stress patterns (included in the repository
-as test fixtures) should produce the expected `status` field values (`ok` vs
-`needs_work`) for each target word, and the `decision_method` field should confirm that
-learned thresholds are being applied once sufficient native exemplar data has
-accumulated. The TypeScript wrapper will include an integration test that submits the
-fixture WAV to the live backend and asserts the expected `percent_correct` score,
-serving as both a functional smoke test and the headline eval metric.
+**The Proof:**
+The agent has succeeded when all 69 target homograph pairs report `decision_method:
+learned_threshold` in the Syllable Stress Assessment Agent's evaluation responses,
+indicating that naive duration fallback has been fully replaced by native-exemplar-
+derived inference. The headline before/after metric is `percent_correct` on a held-out
+validation set of test fixture WAVs replayed against the backend before the Prolific
+study begins and again after convergence, quantifying the accuracy improvement the
+crowdsourced exemplar data delivered. Study completion and per-word convergence progress
+are themselves exposed as observable agent state, making the crowdsourcing pipeline
+inspectable and steerable throughout its run.
