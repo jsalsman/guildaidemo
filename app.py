@@ -878,7 +878,7 @@ def _agent_card() -> dict[str, Any]:
     return {
         "name": "Syllable Stress Evaluator",
         "description": "Evaluates noun/verb stress-shift pronunciation from WAV audio and paragraph context.",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "protocolVersion": "0.1",
         "url": base_url,
         "documentationUrl": f"{base_url}/",
