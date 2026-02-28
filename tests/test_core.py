@@ -319,6 +319,7 @@ def test_a2a_client_can_read_model_card_and_submit_paragraph3_wav(monkeypatch):
     card_resp = client.get("/.well-known/agent.json")
     assert card_resp.status_code == 200
     card = card_resp.get_json()
+    assert card["protocolVersion"] == "0.4.0"
     assert card["skills"][0]["name"] == "pronunciation.evaluate"
     assert card["capabilities"]["methods"]["pronunciation.evaluate"]["requiredParams"] == ["audio_wav_base64"]
 
