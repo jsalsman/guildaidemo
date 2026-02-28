@@ -58,6 +58,7 @@ http://localhost:8080
 - `GET /api/paragraphs`
 - `POST /api/analyze` (`multipart/form-data`: `paragraph_id`, `audio_wav`, optional `native_exemplar`)
 - `GET /healthz`
+- `GET /api/healthz` (alias for environments that only route `/api/*`)
 - `GET /.well-known/agent.json`
 - `POST /a2a`
 
