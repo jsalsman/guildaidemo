@@ -59,6 +59,17 @@ def test_api_analyze_rejects_non_numeric_paragraph_id():
     assert payload["request_id"]
 
 
+def test_health_endpoints_return_ok_payload():
+    client = app.test_client()
+
+    for route in ("/healthz", "/api/healthz"):
+        resp = client.get(route)
+        assert resp.status_code == 200
+        payload = resp.get_json()
+        assert payload["status"] == "ok"
+        assert payload["request_id"]
+
+
 def test_pronunciation_inventory_is_loaded_for_targets():
     assert PRONUNCIATIONS.get("content")
     assert PRONUNCIATIONS.get("increase")

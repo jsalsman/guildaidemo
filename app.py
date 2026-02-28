@@ -858,10 +858,21 @@ def api_paragraphs():
     return jsonify({"request_id": g.request_id, "paragraphs": PARAGRAPHS})
 
 
+def _health_payload() -> dict[str, str]:
+    """Return a standard health payload."""
+    return {"request_id": g.request_id, "status": "ok"}
+
+
 @app.route("/healthz")
 def healthz():
     """Lightweight health-check endpoint."""
-    return jsonify({"request_id": g.request_id, "status": "ok"})
+    return jsonify(_health_payload())
+
+
+@app.route("/api/healthz")
+def api_healthz():
+    """Alias health endpoint under /api for proxy/path-router compatibility."""
+    return jsonify(_health_payload())
 
 
 @app.route("/robots.txt")
