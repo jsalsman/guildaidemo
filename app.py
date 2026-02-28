@@ -369,7 +369,7 @@ def parse_paragraphs(text: str) -> list[dict[str, Any]]:
 
 
 # Load canonical practice paragraphs once at import-time for consistent ids/targets.
-with open("5-paragraph-syllable-stress-test_NV.txt", "r", encoding="utf-8") as f:
+with open("PARAGRAPHS.txt", "r", encoding="utf-8") as f:
     PARAGRAPHS = parse_paragraphs(f.read())
 
 

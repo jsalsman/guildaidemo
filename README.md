@@ -14,7 +14,7 @@ Try it: https://guildaidemo.talknicer.com
 
 ## Features
 
-- Paragraph selector for all annotated paragraphs loaded from `5-paragraph-syllable-stress-test_NV.txt` (currently 5, but dynamic).
+- Paragraph selector for all annotated paragraphs loaded from `PARAGRAPHS.txt` (currently 10, but dynamic).
 - Browser microphone recording with WAV encoding.
 - Optional "Bring Your Own Deepgram API Key" UI section that stores a user-supplied key in a `deepgram_api_key` browser cookie (365-day expiry).
 - "native exemplar" checkbox in the UI to mark exemplar-candidate submissions for later review.
