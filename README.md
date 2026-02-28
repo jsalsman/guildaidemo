@@ -1,6 +1,6 @@
 # syllable-stress
 
-[![Try it on Google Cloud Run](https://img.shields.io/badge/Try_it_on_Google_Cloud_Run-darkgreen)](https://guildaidemo.talknicer.com/)
+[![Try on Cloud Run](https://img.shields.io/badge/Try_on_Cloud_Run-darkgreen)](https://guildaidemo.talknicer.com/)
 [![Agent health](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fguildaidemo.talknicer.com%2Fapi%2Fhealthz&query=%24.status&label=Agent%20health&color=brightgreen)](https://guildaidemo.talknicer.com/api/healthz)
 [![Python version 3.13](https://img.shields.io/badge/Python-3.13-blue?logo=python)](https://www.python.org/downloads/)
 [![Flask version 3.1](https://img.shields.io/badge/Flask-3.1-black?logo=flask)](https://flask.palletsprojects.com/)
