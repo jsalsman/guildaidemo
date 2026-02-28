@@ -233,20 +233,6 @@ Server logs include only the source (`a2a_param`, `cookie`, or `env`) and never 
    - Developer/A2A docs visible on same page,
    - matching `{recording_id}.wav` and `{recording_id}.json` files appear in `BUCKET_DIR`.
 
-
-### Fixture-based visual QA (paragraph 3)
-
-To quickly verify colored confidence rendering and the target table without recording live audio, submit the bundled paragraph 3 WAV fixture and then view the Results section in the browser:
-
-```bash
-curl -sS -X POST http://127.0.0.1:8080/api/analyze \
-  -F paragraph_id=3 \
-  -F native_exemplar=false \
-  -F audio_wav=@tests/abc340c7-fc39-41f0-b1a6-3557f83b7707.wav
-```
-
-This uses the same analysis pipeline as normal uploads (including Deepgram transcription and adaptive thresholding), so it is suitable for screenshot-based regression checks.
-
 ## Tests
 
 Run unit tests:
@@ -260,6 +246,19 @@ Included tests cover:
 - sequence alignment behavior,
 - confidence-cubed and deterministic background normalization,
 - persistence of sidecar and WAV files and schema fields using the paragraph 3 test WAV fixture.
+
+### Fixture-based visual QA
+
+To quickly verify colored confidence rendering and the target table without recording live audio, submit the bundled paragraph 3 WAV fixture and then view the Results section in the browser:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/api/analyze \
+  -F paragraph_id=3 \
+  -F native_exemplar=false \
+  -F audio_wav=@tests/abc340c7-fc39-41f0-b1a6-3557f83b7707.wav
+```
+
+This uses the same analysis pipeline as normal uploads (including Deepgram transcription and adaptive thresholding), so it is suitable for screenshot-based regression checks.
 
 ## Cloud Run notes
 
