@@ -335,7 +335,7 @@ Results for paragraph 3: 5/7 correct (71%)
 - [n8n WhatsApp Business Cloud trigger docs](https://docs.n8n.io/integrations/builtin/trigger-nodes/n8n-nodes-base.whatsapptrigger/)
 - [n8n community WhatsApp voice message workflow template](https://n8n.io/workflows/3586-ai-powered-whatsapp-chatbot-for-text-voice-images-and-pdfs-with-memory/)
 - [n8n self-hosting with Docker](https://docs.n8n.io/hosting/installation/docker/)
-- 
+
 ## Guild.ai proposal draft:
 
 **The Oath**
