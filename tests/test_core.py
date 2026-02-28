@@ -4,11 +4,11 @@ from pathlib import Path
 
 from app import (
     PRONUNCIATIONS,
-    _load_adaptive_thresholds,
-    _THRESHOLD_CACHE,
+    load_adaptive_thresholds,
     DeepgramAPIError,
     app,
     confidence_cubed,
+    gaussian_pdf,
     get_learned_threshold,
     infer_stress_from_word,
     needleman_wunsch_alignment,
@@ -37,6 +37,12 @@ def test_alignment_maps_exact_matches_with_insertions():
     assert mapping[2] == 3
 
 
+
+
+def test_gaussian_pdf_nonpositive_sigma_returns_zero():
+    assert gaussian_pdf(0.0, 0.0, 0.0) == 0.0
+    assert gaussian_pdf(1.0, 0.0, -1.0) == 0.0
+
 def test_confidence_cubed_and_bg_norm_are_deterministic():
     c = confidence_cubed(0.5)
     assert c == 0.125
@@ -55,7 +61,7 @@ def test_api_analyze_rejects_non_numeric_paragraph_id():
     )
     assert resp.status_code == 400
     payload = resp.get_json()
-    assert payload["error"] == "paragraph_id must be 1..5"
+    assert payload["error"] == "paragraph_id must be 1..10"
     assert payload["request_id"]
 
 
@@ -151,23 +157,25 @@ def test_api_analyze_persists_hst_sidecar_and_wav_for_paragraph3_fixture(monkeyp
     assert sidecar["targets"][0]["duration_ratio"] == 1.5
 
 
-def test_threshold_learning_builds_median_midpoint(tmp_path):
+def test_threshold_learning_builds_gaussian_intersection_boundary(tmp_path):
     sidecars = [
         {"native_exemplar": True, "paragraph_id": 1, "targets": [
             {"status": "ok", "word_norm": "record", "token_index": 2, "expected_stress": 1, "duration_ratio_log": 0.6, "core_durations": {"syll1": 0.12, "syll2": 0.08}},
             {"status": "ok", "word_norm": "record", "token_index": 2, "expected_stress": 1, "duration_ratio_log": 0.4, "core_durations": {"syll1": 0.11, "syll2": 0.09}},
             {"status": "ok", "word_norm": "record", "token_index": 2, "expected_stress": 2, "duration_ratio_log": -0.5, "core_durations": {"syll1": 0.08, "syll2": 0.12}},
             {"status": "ok", "word_norm": "record", "token_index": 2, "expected_stress": 2, "duration_ratio_log": -0.3, "core_durations": {"syll1": 0.09, "syll2": 0.11}},
+            {"status": "ok", "word_norm": "record", "token_index": 2, "expected_stress": 1, "duration_ratio_log": 0.5, "core_durations": {"syll1": 0.12, "syll2": 0.08}},
+            {"status": "ok", "word_norm": "record", "token_index": 2, "expected_stress": 2, "duration_ratio_log": -0.4, "core_durations": {"syll1": 0.08, "syll2": 0.12}},
         ]},
     ]
     for i, data in enumerate(sidecars):
         (tmp_path / f"{i}.json").write_text(json.dumps(data), encoding="utf-8")
 
-    thresholds = _load_adaptive_thresholds(str(tmp_path))
+    thresholds = load_adaptive_thresholds(str(tmp_path))
     assert thresholds["word:record"]["threshold"] == 0.05
     assert thresholds["ctx:record:1:2"]["threshold"] == 0.05
-    assert thresholds["word:record"]["class1_count"] == 2
-    assert thresholds["word:record"]["class2_count"] == 2
+    assert thresholds["word:record"]["class1_count"] == 3
+    assert thresholds["word:record"]["class2_count"] == 3
 
 
 def test_threshold_learning_falls_back_when_insufficient_exemplars(tmp_path):
@@ -179,7 +187,7 @@ def test_threshold_learning_falls_back_when_insufficient_exemplars(tmp_path):
         ],
     }
     (tmp_path / "one.json").write_text(json.dumps(data), encoding="utf-8")
-    thresholds = _load_adaptive_thresholds(str(tmp_path))
+    thresholds = load_adaptive_thresholds(str(tmp_path))
     assert "word:record" not in thresholds
 
 
@@ -193,12 +201,13 @@ def test_infer_stress_uses_learned_threshold(monkeypatch, tmp_path):
             {"status": "ok", "word_norm": "record", "token_index": 1, "expected_stress": 1, "duration_ratio_log": 0.5, "core_durations": {"syll1": 0.12, "syll2": 0.08}},
             {"status": "ok", "word_norm": "record", "token_index": 1, "expected_stress": 2, "duration_ratio_log": -0.6, "core_durations": {"syll1": 0.08, "syll2": 0.12}},
             {"status": "ok", "word_norm": "record", "token_index": 1, "expected_stress": 2, "duration_ratio_log": -0.5, "core_durations": {"syll1": 0.08, "syll2": 0.12}},
+            {"status": "ok", "word_norm": "record", "token_index": 1, "expected_stress": 1, "duration_ratio_log": 0.55, "core_durations": {"syll1": 0.12, "syll2": 0.08}},
+            {"status": "ok", "word_norm": "record", "token_index": 1, "expected_stress": 2, "duration_ratio_log": -0.55, "core_durations": {"syll1": 0.08, "syll2": 0.12}},
         ],
     }
     (tmp_path / "trained.json").write_text(json.dumps(trained), encoding="utf-8")
 
     monkeypatch.setattr("app.BUCKET_DIR", str(tmp_path))
-    _THRESHOLD_CACHE.update({"loaded_at": 0.0, "bucket_dir": None, "thresholds": {}})
 
     phones = [
         {"phone": "R", "start": 0.00, "end": 0.01},
@@ -206,18 +215,33 @@ def test_infer_stress_uses_learned_threshold(monkeypatch, tmp_path):
         {"phone": "K", "start": 0.08, "end": 0.09},
         {"phone": "ER", "start": 0.09, "end": 0.14},
     ]
-    result = infer_stress_from_word("record", phones, paragraph_id=3, token_index=1)
+    thresholds = load_adaptive_thresholds(str(tmp_path))
+    result = infer_stress_from_word("record", phones, thresholds, paragraph_id=3, token_index=1)
     assert result["decision_method"] == "learned_threshold"
-    assert result["learned_threshold"] == 0.0
+    assert result["learned_threshold"] is not None
     assert result["threshold_key"] == "ctx:record:3:1"
     assert result["inferred_stress"] == 1
+    assert result["decision_confidence"] is not None
 
+
+
+
+def test_infer_stress_naive_has_no_decision_confidence():
+    phones = [
+        {"phone": "R", "start": 0.00, "end": 0.01},
+        {"phone": "EH", "start": 0.01, "end": 0.05},
+        {"phone": "K", "start": 0.05, "end": 0.06},
+        {"phone": "ER", "start": 0.06, "end": 0.10},
+    ]
+    result = infer_stress_from_word("record", phones, {})
+    assert result["decision_method"] == "naive_duration"
+    assert result["decision_confidence"] is None
 
 def test_malformed_json_ignored_for_threshold_cache(monkeypatch, tmp_path):
     (tmp_path / "bad.json").write_text("}", encoding="utf-8")
     monkeypatch.setattr("app.BUCKET_DIR", str(tmp_path))
-    _THRESHOLD_CACHE.update({"loaded_at": 0.0, "bucket_dir": None, "thresholds": {}})
-    assert get_learned_threshold("record") is None
+    thresholds = load_adaptive_thresholds(str(tmp_path))
+    assert get_learned_threshold(thresholds, "record") is None
 
 
 
@@ -330,7 +354,7 @@ def test_a2a_client_can_read_model_card_and_submit_paragraph3_wav(monkeypatch):
     card_resp = client.get("/.well-known/agent.json")
     assert card_resp.status_code == 200
     card = card_resp.get_json()
-    assert card["protocolVersion"] == "0.4.0"
+    assert card["protocolVersion"] == "0.5.0"
     assert card["skills"][0]["name"] == "pronunciation.evaluate"
     assert card["capabilities"]["methods"]["pronunciation.evaluate"]["requiredParams"] == ["audio_wav_base64"]
 

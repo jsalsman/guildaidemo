@@ -274,20 +274,28 @@ function formatSeconds(value) {
 function formatCoreDurationsWithThreshold(target) {
   const s1 = target?.core_durations?.syll1;
   const s2 = target?.core_durations?.syll2;
-  const durationText = `s1=${formatDuration(s1)} / s2=${formatDuration(s2)}`;
+  const durationText = `S1=${formatDuration(s1)} / S2=${formatDuration(s2)}`;
 
-  if (target?.decision_method === 'learned_threshold' && target.learned_threshold != null) {
-    const thresholdText = Number(target.learned_threshold).toFixed(3);
-    const thresholdKey = target.threshold_key ? ` (${target.threshold_key})` : '';
-    return `${durationText} | threshold=adaptive native_exemplar log(s1/s2)>=${thresholdText}${thresholdKey}`;
+  if (target?.decision_method === 'learned_threshold' && target?.threshold_stats) {
+    const stats = target.threshold_stats;
+    const thresholdText = Number(stats.threshold).toFixed(3);
+    const mu1 = Number(stats.mu1).toFixed(3);
+    const mu2 = Number(stats.mu2).toFixed(3);
+    const sigma1 = Number(stats.sigma1).toFixed(3);
+    const sigma2 = Number(stats.sigma2).toFixed(3);
+    const keyText = stats.key ? `<div>key=${stats.key}</div>` : '';
+    const confidenceText = target?.decision_confidence != null
+      ? `<div><small>Confidence: ${Number(target.decision_confidence).toFixed(1)}%</small></div>`
+      : '';
+    return `${durationText}<div>Gaussian threshold T=(μ₁σ₂+μ₂σ₁)/(σ₁+σ₂)=${thresholdText}</div><div>Noun: μ₁=${mu1}, σ₁=${sigma1}</div><div>Verb: μ₂=${mu2}, σ₂=${sigma2}</div>${confidenceText}${keyText}`;
   }
 
   if (target?.decision_method === 'naive_duration' && s1 != null && s2 != null) {
-    const fallbackSyllable = Number(s1) >= Number(s2) ? 's1' : 's2';
-    return `${durationText} | threshold=fallback longer core vowel (${fallbackSyllable})`;
+    const fallbackSyllable = Number(s1) >= Number(s2) ? 'S1' : 'S2';
+    return `${durationText}<div>Fallback: longer core vowel (${fallbackSyllable})</div>`;
   }
 
-  return `${durationText} | threshold=unavailable`;
+  return `${durationText}<div>threshold=unavailable</div>`;
 }
 
 function renderResults(data) {
@@ -355,7 +363,7 @@ function renderResults(data) {
       Number(timing.deepgram_api_sec || 0) +
       Number(timing.pocketsphinx_alignment_sec || 0) +
       Number(timing.persist_output_files_sec || 0);
-    timingSummary.textContent = `Elapsed time: recording ${formatSeconds(timing.recording_duration_sec)}, read and process exemplar bucket files ${formatSeconds(timing.bucket_json_read_process_sec)}, Deepgram STT ${formatSeconds(timing.deepgram_api_sec)}, PocketSphinx alignment ${formatSeconds(timing.pocketsphinx_alignment_sec)}, writing bucket files ${formatSeconds(timing.persist_output_files_sec)}; total processing time: ${formatSeconds(totalProcessingTimeSec)} seconds`;
+    timingSummary.textContent = `Elapsed time: recording ${formatSeconds(timing.recording_duration_sec)}, read and process all exemplar sidecar files ${formatSeconds(timing.bucket_json_read_process_sec)}, Deepgram STT ${formatSeconds(timing.deepgram_api_sec)}, PocketSphinx alignment ${formatSeconds(timing.pocketsphinx_alignment_sec)}, writing bucket files ${formatSeconds(timing.persist_output_files_sec)}; total processing time: ${formatSeconds(totalProcessingTimeSec)} seconds`;
   }
 }
 

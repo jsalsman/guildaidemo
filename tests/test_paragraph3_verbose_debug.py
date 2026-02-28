@@ -117,7 +117,7 @@ def test_paragraph3_verbose_debug_output():
 
             segment = slice_word_pcm(wav_data, float(dg["start"]), float(dg["end"]), duration)
             phones = align_phonemes(target["word"], segment, float(dg["start"]))
-            inferred = infer_stress_from_word(target["word"], phones)
+            inferred = infer_stress_from_word(target["word"], phones, {})
             row["aligned_phones"] = [p["phone"] for p in phones]
             row["core_phones"] = inferred["core_phones"]
             row["core_durations"] = inferred["core_durations"]

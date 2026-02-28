@@ -5,7 +5,7 @@ output and phone-level timing to infer whether stress was placed on syllable 1
 or syllable 2 for each target.
 """
 
-import base64, hashlib, io, json, math, os, re, statistics, sys, time, uuid, wave
+import base64, glob, hashlib, io, json, math, os, re, statistics, sys, time, uuid, wave
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -38,10 +38,9 @@ HST_TZ = ZoneInfo("Pacific/Honolulu")
 # Small epsilon to stabilize log-ratio computation when durations are very small.
 RATIO_EPS = 1e-4
 # Minimum native-exemplar samples per class (noun/verb) before using learned thresholds.
-MIN_EXEMPLARS_PER_CLASS = 2
-# In-process cache TTL for learned thresholds.
-# Sidecar scans can dominate latency, so we trade freshness for predictable read cost.
-THRESHOLD_CACHE_TTL_SEC = 60
+# We require at least 3 samples so each class has enough points to compute a
+# meaningful standard deviation before we abandon naive duration fallback.
+MIN_EXEMPLARS_PER_CLASS = 3
 
 
 # Flask application instance for all HTTP and A2A routes.
@@ -51,9 +50,7 @@ app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
 
 # Lazy-initialized PocketSphinx decoder singleton.
-_DECODER = None
-# Learned-threshold cache keyed by context/word, refreshed on TTL expiry.
-_THRESHOLD_CACHE: dict[str, Any] = {"loaded_at": 0.0, "bucket_dir": None, "thresholds": {}}
+DECODER_SINGLETON = None
 
 
 class DeepgramAPIError(RuntimeError):
@@ -65,7 +62,7 @@ class DeepgramAPIError(RuntimeError):
         self.status_code = status_code
 
 
-def _track_timing(metric: str, elapsed_sec: float) -> None:
+def track_timing(metric: str, elapsed_sec: float) -> None:
     """Accumulate request-scoped timing metrics when a request context is active."""
     if not has_request_context():
         return
@@ -112,8 +109,15 @@ def parse_bool(value: Any) -> bool:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
+def gaussian_pdf(x: float, mu: float, sigma: float) -> float:
+    """Return Normal(mu, sigma) PDF at x with zero-variance safety."""
+    if sigma <= 0:
+        return 0.0
+    exponent = -0.5 * (((x - mu) / sigma) ** 2)
+    return (1.0 / (sigma * math.sqrt(2.0 * math.pi))) * math.exp(exponent)
 
-def _ratio_metrics(d1: float | None, d2: float | None) -> tuple[float | None, float | None]:
+
+def ratio_metrics(d1: float | None, d2: float | None) -> tuple[float | None, float | None]:
     """Compute duration ratio features for threshold aggregation."""
     if d1 is None or d2 is None:
         return None, None
@@ -124,18 +128,15 @@ def _ratio_metrics(d1: float | None, d2: float | None) -> tuple[float | None, fl
     return round(ratio, 6), round(ratio_log, 6)
 
 
-def _threshold_key(word_norm: str, paragraph_id: int | None = None, token_index: int | None = None) -> str:
+def threshold_key(word_norm: str, paragraph_id: int | None = None, token_index: int | None = None) -> str:
     """Build a stable key string for learned-threshold lookup."""
     if paragraph_id is None or token_index is None:
         return f"word:{word_norm}"
     return f"ctx:{word_norm}:{paragraph_id}:{token_index}"
 
 
-def _load_adaptive_thresholds(bucket_dir: str) -> dict[str, dict[str, Any]]:
-    """Scan sidecars in bucket and compute median-midpoint stress thresholds."""
-    # Local import keeps module import light and avoids global dependency for tests.
-    import glob
-
+def load_adaptive_thresholds(bucket_dir: str) -> dict[str, dict[str, Any]]:
+    """Scan sidecars and compute Gaussian-intersection stress thresholds."""
     # grouped[key][class] -> list[duration_ratio_log].
     # class is expected stress (1=noun pattern, 2=verb pattern).
     grouped: dict[str, dict[int, list[float]]] = {}
@@ -171,31 +172,50 @@ def _load_adaptive_thresholds(bucket_dir: str) -> dict[str, dict[str, Any]]:
             d2 = target.get("core_durations", {}).get("syll2") if isinstance(target.get("core_durations"), dict) else None
             ratio_log = target.get("duration_ratio_log")
             if ratio_log is None:
-                _, ratio_log = _ratio_metrics(d1, d2)
+                _, ratio_log = ratio_metrics(d1, d2)
             if ratio_log is None:
                 continue
 
             # Always collect a word-level key so we can generalize across contexts.
-            word_key = _threshold_key(word_norm)
+            word_key = threshold_key(word_norm)
             grouped.setdefault(word_key, {1: [], 2: []})[expected_stress].append(float(ratio_log))
 
             # Also collect context-level key when paragraph/token coordinates are available.
             token_index = target.get("token_index") if isinstance(target.get("token_index"), int) else None
             if paragraph_id is not None and token_index is not None:
-                ctx_key = _threshold_key(word_norm, paragraph_id, token_index)
+                ctx_key = threshold_key(word_norm, paragraph_id, token_index)
                 grouped.setdefault(ctx_key, {1: [], 2: []})[expected_stress].append(float(ratio_log))
 
     # Final learned thresholds keyed by context (preferred) and word (fallback).
-    # Threshold is midpoint of class medians in log-ratio space.
+    # The decision boundary is the intersection proxy of two normal models in
+    # log-ratio space:
+    #   T = (μ₁σ₂ + μ₂σ₁) / (σ₁ + σ₂)
+    # where class 1 is noun-pattern stress and class 2 is verb-pattern stress.
+    # If both class spreads are exactly zero (σ₁ + σ₂ = 0), we fall back to the
+    # mean midpoint, T = (μ₁ + μ₂) / 2, to avoid division-by-zero.
     learned: dict[str, dict[str, Any]] = {}
     for key, classes in grouped.items():
         c1 = classes[1]
         c2 = classes[2]
         if len(c1) < MIN_EXEMPLARS_PER_CLASS or len(c2) < MIN_EXEMPLARS_PER_CLASS:
             continue
-        threshold = (statistics.median(c1) + statistics.median(c2)) / 2.0
+        mu1 = statistics.mean(c1)
+        mu2 = statistics.mean(c2)
+        sigma1 = statistics.stdev(c1)
+        sigma2 = statistics.stdev(c2)
+
+        sigma_sum = sigma1 + sigma2
+        if sigma_sum == 0:
+            threshold = (mu1 + mu2) / 2.0
+        else:
+            threshold = ((mu1 * sigma2) + (mu2 * sigma1)) / sigma_sum
+
         learned[key] = {
             "threshold": round(float(threshold), 6),
+            "mu1": round(float(mu1), 6),
+            "mu2": round(float(mu2), 6),
+            "sigma1": round(float(sigma1), 6),
+            "sigma2": round(float(sigma2), 6),
             "class1_count": len(c1),
             "class2_count": len(c2),
             "total": len(c1) + len(c2),
@@ -204,37 +224,18 @@ def _load_adaptive_thresholds(bucket_dir: str) -> dict[str, dict[str, Any]]:
     return learned
 
 
-def get_learned_threshold(word_norm: str, paragraph_id: int | None = None, token_index: int | None = None) -> dict[str, Any] | None:
-    """Get cached learned threshold stats for a word/context when available."""
-    # Monotonic clock avoids issues with wall-clock adjustments.
-    now = time.monotonic()
-    should_reload = (
-        _THRESHOLD_CACHE.get("bucket_dir") != BUCKET_DIR
-        or (now - float(_THRESHOLD_CACHE.get("loaded_at", 0.0))) >= THRESHOLD_CACHE_TTL_SEC
-    )
-    if should_reload:
-        load_start = time.perf_counter()
-        try:
-            # Refresh cache from the bucket directory on TTL expiry/bucket switch.
-            _THRESHOLD_CACHE["thresholds"] = _load_adaptive_thresholds(BUCKET_DIR)
-            _THRESHOLD_CACHE["loaded_at"] = now
-            _THRESHOLD_CACHE["bucket_dir"] = BUCKET_DIR
-        except Exception as exc:
-            # Fail open: preserve request path even if threshold loading fails.
-            # Downstream code falls back to naive duration comparison.
-            log(f"adaptive threshold load warning: {exc}")
-            _THRESHOLD_CACHE["thresholds"] = {}
-            _THRESHOLD_CACHE["loaded_at"] = now
-            _THRESHOLD_CACHE["bucket_dir"] = BUCKET_DIR
-        finally:
-            _track_timing("bucket_json_read_process_sec", time.perf_counter() - load_start)
-
-    thresholds = _THRESHOLD_CACHE.get("thresholds", {})
-    ctx_key = _threshold_key(word_norm, paragraph_id, token_index)
-    return thresholds.get(ctx_key) or thresholds.get(_threshold_key(word_norm))
+def get_learned_threshold(
+    thresholds: dict[str, dict[str, Any]],
+    word_norm: str,
+    paragraph_id: int | None = None,
+    token_index: int | None = None,
+) -> dict[str, Any] | None:
+    """Get learned threshold stats for a word/context when available."""
+    ctx_key = threshold_key(word_norm, paragraph_id, token_index)
+    return thresholds.get(ctx_key) or thresholds.get(threshold_key(word_norm))
 
 
-def _recording_id_hst() -> tuple[str, str]:
+def recording_id_hst() -> tuple[str, str]:
     """Build a microsecond recording id and ISO timestamp in HST."""
     now_hst = datetime.now(HST_TZ)
     return now_hst.strftime("%y%m%d%H%M%S%f"), now_hst.isoformat(timespec="microseconds")
@@ -250,7 +251,7 @@ def persist_submission(
     source: str,
 ) -> dict[str, Any]:
     """Persist WAV and sidecar JSON into the mounted bucket directory."""
-    recording_id, created_at_hst = _recording_id_hst()
+    recording_id, created_at_hst = recording_id_hst()
     os.makedirs(BUCKET_DIR, exist_ok=True)
     wav_path = os.path.join(BUCKET_DIR, f"{recording_id}.wav")
     json_path = os.path.join(BUCKET_DIR, f"{recording_id}.json")
@@ -268,7 +269,7 @@ def persist_submission(
     for target in analysis.get("targets", []):
         d1 = target.get("core_durations", {}).get("syll1")
         d2 = target.get("core_durations", {}).get("syll2")
-        ratio, ratio_log = _ratio_metrics(d1, d2)
+        ratio, ratio_log = ratio_metrics(d1, d2)
         targets.append(
             {
                 "token_index": target.get("token_index"),
@@ -324,7 +325,7 @@ def persist_submission(
         jf.flush()
         os.fsync(jf.fileno())
     os.replace(tmp_json_path, json_path)
-    _track_timing("persist_output_files_sec", time.perf_counter() - write_start)
+    track_timing("persist_output_files_sec", time.perf_counter() - write_start)
 
     return {
         "recording_id": recording_id,
@@ -541,15 +542,15 @@ def needleman_wunsch_alignment(ref_tokens: list[str], hyp_tokens: list[str]) -> 
     return mapping
 
 
-def _ensure_decoder():
+def ensure_decoder():
     """Lazily initialize and cache the PocketSphinx decoder instance."""
-    global _DECODER
-    if _DECODER is not None:
-        return _DECODER
+    global DECODER_SINGLETON
+    if DECODER_SINGLETON is not None:
+        return DECODER_SINGLETON
     from pocketsphinx import Decoder, get_model_path
 
     model_path = get_model_path()
-    _DECODER = Decoder(
+    DECODER_SINGLETON = Decoder(
         bestpath=False,
         hmm=model_path + "/en-us/en-us",
         dict=model_path + "/en-us/cmudict-en-us.dict",
@@ -557,7 +558,7 @@ def _ensure_decoder():
         loglevel="FATAL",
         fsgusefiller=False,
     )
-    return _DECODER
+    return DECODER_SINGLETON
 
 
 def slice_word_pcm(wav_data: WavData, start: float, end: float, total_duration: float) -> bytes:
@@ -575,7 +576,7 @@ def slice_word_pcm(wav_data: WavData, start: float, end: float, total_duration: 
 
 def align_phonemes(word_text: str, pcm_bytes: bytes, start_time: float) -> list[dict[str, Any]]:
     """Run forced alignment for one word and return phone intervals in seconds."""
-    decoder = _ensure_decoder()
+    decoder = ensure_decoder()
     decoder.set_align_text(normalize_token(word_text) or word_text)
     decoder.start_utt()
     decoder.process_raw(pcm_bytes, full_utt=True)
@@ -608,6 +609,7 @@ def phoneme_match_score(aligned: list[dict[str, Any]], pronunciation: list[str])
 def infer_stress_from_word(
     word: str,
     aligned_phones: list[dict[str, Any]],
+    learned_thresholds: dict[str, dict[str, Any]],
     paragraph_id: int | None = None,
     token_index: int | None = None,
 ) -> dict[str, Any]:
@@ -623,6 +625,8 @@ def infer_stress_from_word(
             "learned_threshold": None,
             "threshold_key": None,
             "decision_method": None,
+            "threshold_stats": None,
+            "decision_confidence": None,
         }
 
     best = max(variants, key=lambda v: phoneme_match_score(aligned_phones, v))
@@ -636,6 +640,8 @@ def infer_stress_from_word(
             "learned_threshold": None,
             "threshold_key": None,
             "decision_method": None,
+            "threshold_stats": None,
+            "decision_confidence": None,
         }
 
     syll1_phone = vowel_positions[0][1]
@@ -660,14 +666,39 @@ def infer_stress_from_word(
     learned_threshold = None
     threshold_key = None
     decision_method = None
+    threshold_stats = None
+    decision_confidence = None
     if d1 is not None and d2 is not None:
-        _, ratio_log = _ratio_metrics(d1, d2)
-        threshold_stats = get_learned_threshold(norm, paragraph_id=paragraph_id, token_index=token_index)
+        _, ratio_log = ratio_metrics(d1, d2)
+        threshold_stats = get_learned_threshold(
+            learned_thresholds,
+            norm,
+            paragraph_id=paragraph_id,
+            token_index=token_index,
+        )
         if threshold_stats and ratio_log is not None:
             learned_threshold = threshold_stats["threshold"]
             threshold_key = threshold_stats["key"]
             inferred = 1 if ratio_log >= learned_threshold else 2
             decision_method = "learned_threshold"
+            threshold_stats = {
+                "mu1": threshold_stats.get("mu1"),
+                "mu2": threshold_stats.get("mu2"),
+                "sigma1": threshold_stats.get("sigma1"),
+                "sigma2": threshold_stats.get("sigma2"),
+                "threshold": threshold_stats.get("threshold"),
+                "class1_count": threshold_stats.get("class1_count"),
+                "class2_count": threshold_stats.get("class2_count"),
+                "key": threshold_stats.get("key"),
+            }
+            mu1 = float(threshold_stats.get("mu1") or 0.0)
+            mu2 = float(threshold_stats.get("mu2") or 0.0)
+            sig1 = float(threshold_stats.get("sigma1") or 0.0)
+            sig2 = float(threshold_stats.get("sigma2") or 0.0)
+            p1 = gaussian_pdf(ratio_log, mu1, sig1)
+            p2 = gaussian_pdf(ratio_log, mu2, sig2)
+            confidence = (max(p1, p2) / (p1 + p2 + 1e-9)) * 100.0
+            decision_confidence = round(float(confidence), 1)
         else:
             inferred = 1 if d1 >= d2 else 2
             decision_method = "naive_duration"
@@ -680,6 +711,8 @@ def infer_stress_from_word(
         "learned_threshold": learned_threshold,
         "threshold_key": threshold_key,
         "decision_method": decision_method,
+        "threshold_stats": threshold_stats,
+        "decision_confidence": decision_confidence,
     }
 
 
@@ -725,6 +758,15 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes, deepgram_api_ke
     wav_data = read_wav_bytes(wav_bytes)
     duration = len(wav_data.pcm_bytes) / (wav_data.sample_rate * wav_data.channels * wav_data.sample_width)
 
+    threshold_load_start = time.perf_counter()
+    try:
+        learned_thresholds = load_adaptive_thresholds(BUCKET_DIR)
+    except Exception as exc:
+        log(f"adaptive threshold load warning: {exc}")
+        learned_thresholds = {}
+    finally:
+        track_timing("bucket_json_read_process_sec", time.perf_counter() - threshold_load_start)
+
     alignment_total = 0.0
     targets_out = []
     for t in paragraph["targets"]:
@@ -748,6 +790,8 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes, deepgram_api_ke
             "duration_ratio_log": None,
             "learned_threshold": None,
             "threshold_key": None,
+            "threshold_stats": None,
+            "decision_confidence": None,
         }
         if mapped is None or mapped >= len(deepgram_words):
             targets_out.append(base)
@@ -764,7 +808,13 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes, deepgram_api_ke
             alignment_start = time.perf_counter()
             phones = align_phonemes(t["word"], segment, dg["start"])
             alignment_total += time.perf_counter() - alignment_start
-            inferred = infer_stress_from_word(t["word"], phones, paragraph_id=paragraph.get("id"), token_index=t.get("token_index"))
+            inferred = infer_stress_from_word(
+                t["word"],
+                phones,
+                learned_thresholds=learned_thresholds,
+                paragraph_id=paragraph.get("id"),
+                token_index=t.get("token_index"),
+            )
             base.update(inferred)
             if inferred["inferred_stress"] is not None:
                 base["status"] = "ok"
@@ -858,7 +908,7 @@ def api_paragraphs():
     return jsonify({"request_id": g.request_id, "paragraphs": PARAGRAPHS})
 
 
-def _health_payload() -> dict[str, str]:
+def health_payload() -> dict[str, str]:
     """Return a standard health payload."""
     return {"request_id": g.request_id, "status": "ok"}
 
@@ -866,13 +916,13 @@ def _health_payload() -> dict[str, str]:
 @app.route("/healthz")
 def healthz():
     """Lightweight health-check endpoint."""
-    return jsonify(_health_payload())
+    return jsonify(health_payload())
 
 
 @app.route("/api/healthz")
 def api_healthz():
     """Alias health endpoint under /api for proxy/path-router compatibility."""
-    return jsonify(_health_payload())
+    return jsonify(health_payload())
 
 
 @app.route("/robots.txt")
@@ -882,15 +932,15 @@ def robots_txt() -> Response:
     return Response(body, mimetype="text/plain")
 
 
-def _agent_card() -> dict[str, Any]:
+def agent_card_payload() -> dict[str, Any]:
     """Build static-ish A2A agent capability metadata."""
     base_url = request.host_url.rstrip("/")
     rpc_endpoint = f"{base_url}/a2a"
     return {
         "name": "Syllable Stress Evaluator",
         "description": "Evaluates noun/verb stress-shift pronunciation from WAV audio and paragraph context.",
-        "version": "0.4.0",
-        "protocolVersion": "0.4.0",
+        "version": "0.5.0",
+        "protocolVersion": "0.5.0",
         "url": base_url,
         "documentationUrl": f"{base_url}/",
         "capabilities": {
@@ -927,7 +977,7 @@ def _agent_card() -> dict[str, Any]:
 @app.route("/.well-known/agent.json")
 def agent_card():
     """Expose A2A agent-card metadata at the well-known endpoint."""
-    card = _agent_card()
+    card = agent_card_payload()
     card["request_id"] = g.request_id
     return jsonify(card)
 
@@ -994,7 +1044,7 @@ def a2a():
         return rpc_err(-32600, "Invalid JSON-RPC version")
 
     if method == "agent.about":
-        result = _agent_card()
+        result = agent_card_payload()
         result["request_id"] = g.request_id
         return jsonify({"jsonrpc": "2.0", "id": rpc_id, "result": result})
 

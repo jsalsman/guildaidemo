@@ -141,17 +141,18 @@ The sidecar JSON is written with an atomic temp-file-and-rename pattern (`.json.
 
 ## Adaptive thresholding from native exemplar sidecars
 
-The inference pipeline can learn stress decision thresholds from previously persisted sidecars in `$BUCKET_DIR/*.json`.
+The inference pipeline can learn stress decision thresholds from previously persisted sidecars in `$BUCKET_DIR/*.json`, reading all matching sidecars fresh for each analysis request.
 
 - **Data source:** all JSON sidecars in `BUCKET_DIR` (default `/bucket`).
 - **Training filter:** only samples where top-level `native_exemplar` is `true`, target `status` is `"ok"`, `expected_stress` is 1 or 2, and target syllable durations are usable.
 - **Feature:** `duration_ratio_log = ln((syll1 + 1e-4)/(syll2 + 1e-4))`.
-- **Threshold method:** for each key, compute `thr = (median(class1) + median(class2)) / 2` where class1 is expected stress 1 and class2 is expected stress 2.
+- **Threshold method:** for each key, fit class summaries in log-ratio space and compute a Gaussian intersection boundary using T = (μ₁σ₂ + μ₂σ₁) / (σ₁ + σ₂), where class 1 is expected stress 1 (noun pattern) and class 2 is expected stress 2 (verb pattern).
 - **Keys:**
   - context key: `(word_norm, paragraph_id, token_index)` when available,
   - fallback key: `word_norm`.
-- **Minimum data guardrail:** learned thresholds are used only when **both** classes have at least 2 exemplar samples.
-- **Fallback behavior:** if no usable learned threshold exists (or bucket data is empty/corrupt), the app keeps the original heuristic: `syll1 >= syll2 => stress 1 else stress 2`.
+- **Minimum data guardrail:** learned thresholds are used only when **both** classes have at least 3 exemplar samples, so each class has enough points for a valid standard deviation.
+- **Boundary safety fallback:** if σ₁ + σ₂ = 0 (identical spread), the threshold falls back to midpoint(T) = (μ₁ + μ₂) / 2.
+- **Decision fallback:** if no usable learned threshold exists (or sidecar data is empty/corrupt), the app keeps the original heuristic: `syll1 >= syll2 => stress 1 else stress 2`.
 
 Target output now includes debug fields:
 
@@ -159,6 +160,8 @@ Target output now includes debug fields:
 - `duration_ratio_log`
 - `learned_threshold` (nullable)
 - `threshold_key` (nullable)
+- `threshold_stats` (nullable object with `mu1`, `mu2`, `sigma1`, `sigma2`, class counts, and effective threshold)
+- `decision_confidence` (nullable, 0.0-100.0, only when `decision_method` is `"learned_threshold"`)
 
 ### A2A JSON-RPC quickstart (paragraph 3 WAV fixture)
 
@@ -229,6 +232,20 @@ Server logs include only the source (`a2a_param`, `cookie`, or `env`) and never 
    - per-target table populated,
    - Developer/A2A docs visible on same page,
    - matching `{recording_id}.wav` and `{recording_id}.json` files appear in `BUCKET_DIR`.
+
+
+### Fixture-based visual QA (paragraph 3)
+
+To quickly verify colored confidence rendering and the target table without recording live audio, submit the bundled paragraph 3 WAV fixture and then view the Results section in the browser:
+
+```bash
+curl -sS -X POST http://127.0.0.1:8080/api/analyze \
+  -F paragraph_id=3 \
+  -F native_exemplar=false \
+  -F audio_wav=@tests/abc340c7-fc39-41f0-b1a6-3557f83b7707.wav
+```
+
+This uses the same analysis pipeline as normal uploads (including Deepgram transcription and adaptive thresholding), so it is suitable for screenshot-based regression checks.
 
 ## Tests
 
