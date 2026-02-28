@@ -335,3 +335,49 @@ Results for paragraph 3: 5/7 correct (71%)
 - [n8n WhatsApp Business Cloud trigger docs](https://docs.n8n.io/integrations/builtin/trigger-nodes/n8n-nodes-base.whatsapptrigger/)
 - [n8n community WhatsApp voice message workflow template](https://n8n.io/workflows/3586-ai-powered-whatsapp-chatbot-for-text-voice-images-and-pdfs-with-memory/)
 - [n8n self-hosting with Docker](https://docs.n8n.io/hosting/installation/docker/)
+- 
+## Guild.ai proposal draft:
+
+**The Oath**
+The Syllable Stress Assessment Agent is a pronunciation assessment agent for English
+language learners that evaluates whether a speaker correctly stress-shifts noun/verb
+homograph pairs — words like *record*, *project*, and *permit* that change stress
+placement depending on their grammatical role. Its purpose is to give immediate,
+word-level feedback on a specific and commonly mispronounced feature of English that
+most learners never explicitly study. It will be used by EFL students and teachers,
+language learning app developers, and anyone building conversational AI systems that
+need to assess spoken English quality.
+
+**The Reagents**
+The agent is implemented in TypeScript and deployed on the Guild platform. It wraps an
+existing A2A-compatible Python backend — already live at guildaidemo.talknicer.com on
+Google Cloud Run — which handles the computationally intensive work: Deepgram Nova-2
+speech-to-text with word-level confidence scores, Needleman-Wunsch sequence alignment,
+and PocketSphinx forced phoneme alignment for syllable nucleus duration inference. The
+TypeScript layer exposes a Guild-native agent card at `/.well-known/agent.json` and a
+JSON-RPC endpoint implementing `pronunciation.evaluate`, `paragraphs.get_text`, and
+`paragraphs.count`, delegating to the Python backend via standard HTTP. Persistence of
+audio recordings and analysis sidecars is handled by the backend using Google Cloud
+Storage.
+
+**The Ritual**
+When invoked, the TypeScript agent receives a base64-encoded 16kHz mono WAV and a
+paragraph ID, forwards them to the Python backend's `pronunciation.evaluate` A2A
+endpoint, and returns the structured result: per-word stress evaluations with expected
+vs. inferred stress, syllable duration ratios, confidence scores, and a summary
+percentage. The Python backend pipeline is already fully operational; the TypeScript
+wrapper adds Guild platform integration, agent card discovery, and any auth or
+observability instrumentation the platform requires. This architecture also demonstrates
+a natural multi-agent pattern: a Guild-native orchestrator agent delegating a specialized
+acoustic analysis task to a domain-specific backend agent via A2A.
+
+**The Proof**
+The agent is working when it correctly identifies stress errors at a rate consistent with
+human listener judgments on the same recordings. Concretely: a set of reference WAV
+recordings with known correct and incorrect stress patterns (included in the repository
+as test fixtures) should produce the expected `status` field values (`ok` vs
+`needs_work`) for each target word, and the `decision_method` field should confirm that
+learned thresholds are being applied once sufficient native exemplar data has
+accumulated. The TypeScript wrapper will include an integration test that submits the
+fixture WAV to the live backend and asserts the expected `percent_correct` score,
+serving as both a functional smoke test and the headline eval metric.
