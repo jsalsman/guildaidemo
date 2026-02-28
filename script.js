@@ -419,3 +419,48 @@ if (clearDeepgramKeyBtn) clearDeepgramKeyBtn.addEventListener('click', clearDeep
 
 refreshDeepgramStatus();
 loadParagraphs();
+
+function addCopyButtonsToExamples() {
+  const fallbackCopy = (text) => {
+    const textArea = document.createElement('textarea');
+    textArea.value = text;
+    textArea.setAttribute('readonly', '');
+    textArea.style.position = 'absolute';
+    textArea.style.left = '-9999px';
+    document.body.appendChild(textArea);
+    textArea.select();
+    document.execCommand('copy');
+    document.body.removeChild(textArea);
+  };
+
+  document.querySelectorAll('.docs pre:not(.no-copy)').forEach((pre) => {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'pre-block';
+    pre.parentNode.insertBefore(wrapper, pre);
+    wrapper.appendChild(pre);
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'copy-pre-btn';
+    button.setAttribute('aria-label', 'Copy example to clipboard');
+    button.title = 'Copy';
+    button.textContent = '📋';
+
+    button.addEventListener('click', async () => {
+      const text = pre.textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (error) {
+        fallbackCopy(text);
+      }
+      button.textContent = '✓';
+      window.setTimeout(() => {
+        button.textContent = '📋';
+      }, 1200);
+    });
+
+    wrapper.appendChild(button);
+  });
+}
+
+addCopyButtonsToExamples();

@@ -106,20 +106,20 @@
 }</pre>
       <h3>Example response (truncated)</h3>
       <p>This sample shows the structure you receive after a successful <code>pronunciation.evaluate</code> call. The <code>analysis</code> block contains transcription confidence, token alignment, per-target status, and aggregate scoring, while <code>persistence</code> contains generated IDs and output file locations. Use this shape to map results into UI components and interpret success by checking both the summary score and individual target statuses.</p>
-      <pre>{
+      <pre class="no-copy">{
   "jsonrpc": "2.0",
   "id": "p3-a2a-demo",
   "result": {
     "request_id": "b0f8f5b8-6f6d-4d73-bac2-89f8bf7e0f91",
     "analysis": {
       "deepgram_words": [
-        {"word": "He", "start": 0.42, "end": 0.58, "confidence": 0.99},
-        {"word": "recorded", "start": 0.58, "end": 1.02, "confidence": 0.97},
+        {"word": "They", "start": 0.42, "end": 0.58, "confidence": 0.99},
+        {"word": "record", "start": 0.58, "end": 1.02, "confidence": 0.97},
         {"word": "the", "start": 1.02, "end": 1.12, "confidence": 0.98},
         {"word": "project", "start": 1.12, "end": 1.51, "confidence": 0.96}
       ],
       "alignment": [
-        {"ref_token": "recorded", "hyp_word": "recorded", "confidence": 0.97},
+        {"ref_token": "record", "hyp_word": "record", "confidence": 0.97},
         {"ref_token": "project", "hyp_word": "project", "confidence": 0.96}
       ],
       "targets": [
