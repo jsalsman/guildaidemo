@@ -5,13 +5,14 @@ output and phone-level timing to infer whether stress was placed on syllable 1
 or syllable 2 for each target.
 """
 
-import base64, glob, hashlib, io, json, math, os, re, statistics, sys, time, uuid, wave
+import asyncio, base64, glob, hashlib, io, json, math, os, re, statistics, sys, time, uuid, wave
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from typing import Any
 
 import cmudict
+import aiofiles
 import requests
 from flask import Flask, Response, g, has_request_context, jsonify, render_template, request
 
@@ -258,12 +259,6 @@ def persist_submission(
     json_path = os.path.join(BUCKET_DIR, f"{recording_id}.json")
     tmp_json_path = f"{json_path}.tmp"
 
-    write_start = time.perf_counter()
-    with open(wav_path, "wb") as wf:
-        wf.write(wav_bytes)
-        wf.flush()
-        os.fsync(wf.fileno())
-
     paragraph_text = paragraph.get("display_text", "")
     paragraph_hash = hashlib.sha256(paragraph_text.encode("utf-8")).hexdigest() if paragraph_text else None
     targets = []
@@ -320,11 +315,21 @@ def persist_submission(
         },
     }
 
-    with open(tmp_json_path, "w", encoding="utf-8") as jf:
-        json.dump(sidecar, jf, ensure_ascii=False, indent=2)
-        jf.write("\n")
-        jf.flush()
-        os.fsync(jf.fileno())
+    async def write_output_files() -> None:
+        sidecar_json = json.dumps(sidecar, ensure_ascii=False, indent=2) + "\n"
+
+        async def write_wav_file() -> None:
+            async with aiofiles.open(wav_path, "wb") as wf:
+                await wf.write(wav_bytes)
+
+        async def write_sidecar_file() -> None:
+            async with aiofiles.open(tmp_json_path, "w", encoding="utf-8") as jf:
+                await jf.write(sidecar_json)
+
+        await asyncio.gather(write_wav_file(), write_sidecar_file())
+
+    write_start = time.perf_counter()
+    asyncio.run(write_output_files())
     os.replace(tmp_json_path, json_path)
     track_timing("persist_output_files_sec", time.perf_counter() - write_start)
 
