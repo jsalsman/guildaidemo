@@ -67,11 +67,13 @@ Agent card discovery advertises method-level capabilities for `agent.about`, `pa
 
 ### Persistence behavior (`/api/analyze` and `/a2a`)
 
-For each successful analysis, the app writes two files synchronously into `BUCKET_DIR`: `{recording_id}.wav` (original uploaded WAV bytes) and `{recording_id}.json` (analysis sidecar). The `recording_id` is a microsecond-resolution timestamp string. Example:
+For each successful analysis, the app writes two files synchronously into `BUCKET_DIR`: `{recording_id}.wav` (original uploaded WAV bytes) and `{recording_id}.json` (analysis sidecar). The `recording_id` is a microsecond-resolution timestamp string. For native exemplar uploads (`native_exemplar=true`), the timestamp is suffixed with `e` before the file extension so pairs are easier to spot in bucket listings. Example:
 
 ```text
 /bucket/260226140321123456.wav
 /bucket/260226140321123456.json
+/bucket/260226140321123456e.wav   # native exemplar
+/bucket/260226140321123456e.json  # native exemplar
 ```
 
 ### Recording JSON schema
@@ -132,6 +134,8 @@ Each sidecar file contains the following top-level structure:
   }
 }
 ```
+
+When `native_exemplar` is `true`, `recording_id` and persisted filenames append `e` before the extension (for example, `YYMMDDHHMMSSffffffe.wav` and `YYMMDDHHMMSSffffffe.json`).
 
 `targets[*].duration_ratio` is computed as `syll1/syll2` when both values exist and `syll2 > 0`; otherwise it is `null`.
 
@@ -231,7 +235,7 @@ Server logs include only the source (`a2a_param`, `cookie`, or `env`) and never 
    - dashed orange boxes for missing/unaligned targets,
    - per-target table populated,
    - Developer/A2A docs visible on same page,
-   - matching `{recording_id}.wav` and `{recording_id}.json` files appear in `BUCKET_DIR`.
+   - matching `{recording_id}.wav` and `{recording_id}.json` files appear in `BUCKET_DIR` (`{recording_id}` ends with `e` for native exemplar submissions).
 
 ## Tests
 
