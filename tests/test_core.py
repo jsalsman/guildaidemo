@@ -136,7 +136,8 @@ def test_api_analyze_persists_hst_sidecar_and_wav_for_paragraph3_fixture(monkeyp
 
     persistence = payload["persistence"]
     recording_id = persistence["recording_id"]
-    assert len(recording_id) == 18
+    assert len(recording_id) == 19
+    assert recording_id.endswith("e")
     assert persistence["wav_path"].endswith(f"{recording_id}.wav")
     assert persistence["json_path"].endswith(f"{recording_id}.json")
 

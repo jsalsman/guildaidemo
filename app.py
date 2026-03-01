@@ -251,7 +251,8 @@ def persist_submission(
     source: str,
 ) -> dict[str, Any]:
     """Persist WAV and sidecar JSON into the mounted bucket directory."""
-    recording_id, created_at_hst = recording_id_hst()
+    base_recording_id, created_at_hst = recording_id_hst()
+    recording_id = f"{base_recording_id}e" if native_exemplar else base_recording_id
     os.makedirs(BUCKET_DIR, exist_ok=True)
     wav_path = os.path.join(BUCKET_DIR, f"{recording_id}.wav")
     json_path = os.path.join(BUCKET_DIR, f"{recording_id}.json")

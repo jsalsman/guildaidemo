@@ -92,7 +92,7 @@
   }
 }</pre>
       <h3>Example request: pronunciation.evaluate</h3>
-      <p>This is the main scoring request for stress-shift pronunciation analysis. Provide <code>audio_wav_base64</code> (required) with 16 kHz mono WAV audio, plus either <code>paragraph_id</code> or paragraph text context; <code>native_exemplar</code> is optional and can influence output handling. Optionally include <code>deepgram_api_key</code> to override server-side key selection for that request. Use this after capturing audio, then interpret the returned analysis fields (alignment, target statuses, and summary score) to determine pronunciation accuracy and feedback.</p>
+      <p>This is the main scoring request for stress-shift pronunciation analysis. Provide <code>audio_wav_base64</code> (required) with 16 kHz mono WAV audio, plus either <code>paragraph_id</code> or paragraph text context; <code>native_exemplar</code> is optional and can influence output handling (when true, persisted bucket filenames use an <code>e</code> suffix before <code>.wav</code>/<code>.json</code>). Optionally include <code>deepgram_api_key</code> to override server-side key selection for that request. Use this after capturing audio, then interpret the returned analysis fields (alignment, target statuses, and summary score) to determine pronunciation accuracy and feedback.</p>
       <pre>{
   "jsonrpc": "2.0",
   "id": "p3-a2a-demo",
@@ -152,9 +152,9 @@
       }
     },
     "persistence": {
-      "recording_id": "250227114501123456",
-      "wav_path": "gs://syllable-stress/250227114501123456.wav",
-      "json_path": "gs://syllable-stress/250227114501123456.json"
+      "recording_id": "250227114501123456e",
+      "wav_path": "gs://syllable-stress/250227114501123456e.wav",
+      "json_path": "gs://syllable-stress/250227114501123456e.json"
     }
   }
 }</pre>
