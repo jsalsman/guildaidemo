@@ -1,5 +1,5 @@
-"""Flask application for evaluating noun/verb syllable stress from WAV audio.
-
+"""
+Flask application for evaluating noun/verb syllable stress from WAV audio.
 The service accepts paragraph context with marked target words and aligns ASR
 output and phone-level timing to infer whether stress was placed on syllable 1
 or syllable 2 for each target.
@@ -17,7 +17,6 @@ import aiofiles
 import requests
 from flask import Flask, Response, g, has_request_context, jsonify, render_template, request
 
-
 # Shared fallback Deepgram API key used for outbound ASR requests.
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY")
 # Deepgram endpoint with explicit query params.
@@ -27,16 +26,13 @@ DEEPGRAM_URL = (
     "https://api.deepgram.com/v1/listen"
     "?model=nova-2&language=en-US&punctuate=false&diarize=false"
 )
+
 # ARPAbet vowel phone set used to identify candidate stressed nuclei.
 VOWEL_BASES = {
     "AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY", "OW", "OY", "UH", "UW"
 }
 # Padding around each target-word window during phone alignment.
 MAX_WORD_PAD_SEC = 0.12
-# Bucket directory where WAV/JSON sidecar pairs are persisted and reloaded from.
-BUCKET_DIR = os.environ.get("BUCKET_DIR", "/bucket")
-# Timezone used for recording ids and persisted timestamps.
-HST_TZ = ZoneInfo("Pacific/Honolulu")
 # Small epsilon to stabilize log-ratio computation when durations are very small.
 RATIO_EPS = 1e-4
 # Minimum native-exemplar samples per class (noun/verb) before using learned thresholds.
@@ -44,19 +40,22 @@ RATIO_EPS = 1e-4
 # meaningful standard deviation before we abandon naive duration fallback.
 MIN_EXEMPLARS_PER_CLASS = 3
 
+# Bucket directory where WAV/JSON sidecar pairs are persisted and reloaded from.
+BUCKET_DIR = os.environ.get("BUCKET_DIR", "/bucket")
+# Timezone used for recording ids and persisted timestamps.
+HST_TZ = ZoneInfo("Pacific/Honolulu")
 
 # Flask application instance for all HTTP and A2A routes.
 app = Flask(__name__)
 # Maximum request payload size (25 MB) to guard upload resource usage.
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
-
 # Lazy-initialized PocketSphinx decoder singleton.
 DECODER_SINGLETON = None
+
 # Background I/O pool used to write persisted WAV/sidecar artifacts off the
 # request thread so API responses are not blocked on bucket FUSE latency.
 PERSIST_EXECUTOR = ThreadPoolExecutor(max_workers=int(os.environ.get("PERSIST_WORKERS", "4")))
-
 
 class DeepgramAPIError(RuntimeError):
     """Friendly, client-safe wrapper for upstream Deepgram API failures."""
@@ -65,7 +64,6 @@ class DeepgramAPIError(RuntimeError):
         super().__init__(user_message)
         self.user_message = user_message
         self.status_code = status_code
-
 
 def track_timing(metric: str, elapsed_sec: float) -> None:
     """Accumulate request-scoped timing metrics when a request context is active."""
@@ -76,12 +74,10 @@ def track_timing(metric: str, elapsed_sec: float) -> None:
         return
     timings[metric] = float(timings.get(metric, 0.0)) + float(elapsed_sec)
 
-
 def log(message: str) -> None:
     """Print request-scoped logs with a request id for easier traceability."""
     rid = getattr(g, "request_id", "-")
     print(f"[request_id={rid}] {message}", file=sys.stderr, flush=True)
-
 
 def normalize_token(token: str) -> str:
     """Normalize a token to alphanumerics for matching/alignment."""
@@ -90,7 +86,6 @@ def normalize_token(token: str) -> str:
     token = re.sub(r"[^a-z0-9]+", "", token)
     return token
 
-
 def confidence_cubed(confidence: float | None) -> float | None:
     """Re-weight confidence by cubing, emphasizing high-confidence words."""
     if confidence is None:
@@ -98,13 +93,11 @@ def confidence_cubed(confidence: float | None) -> float | None:
     c = max(0.0, min(1.0, float(confidence)))
     return c ** 3
 
-
 def normalize_bg(value: float | None) -> float:
     """Clamp background intensity values to [0, 1] for rendering."""
     if value is None:
         return 0.0
     return max(0.0, min(1.0, value))
-
 
 def parse_bool(value: Any) -> bool:
     """Parse a boolean-ish value from form/json payloads."""
@@ -121,7 +114,6 @@ def gaussian_pdf(x: float, mu: float, sigma: float) -> float:
     exponent = -0.5 * (((x - mu) / sigma) ** 2)
     return (1.0 / (sigma * math.sqrt(2.0 * math.pi))) * math.exp(exponent)
 
-
 def ratio_metrics(d1: float | None, d2: float | None) -> tuple[float | None, float | None]:
     """Compute duration ratio features for threshold aggregation."""
     if d1 is None or d2 is None:
@@ -132,13 +124,11 @@ def ratio_metrics(d1: float | None, d2: float | None) -> tuple[float | None, flo
     ratio_log = math.log((d1 + RATIO_EPS) / (d2 + RATIO_EPS))
     return round(ratio, 6), round(ratio_log, 6)
 
-
 def threshold_key(word_norm: str, paragraph_id: int | None = None, token_index: int | None = None) -> str:
     """Build a stable key string for learned-threshold lookup."""
     if paragraph_id is None or token_index is None:
         return f"word:{word_norm}"
     return f"ctx:{word_norm}:{paragraph_id}:{token_index}"
-
 
 def load_adaptive_thresholds(bucket_dir: str) -> dict[str, dict[str, Any]]:
     """Scan sidecars and compute Gaussian-intersection stress thresholds."""
@@ -228,7 +218,6 @@ def load_adaptive_thresholds(bucket_dir: str) -> dict[str, dict[str, Any]]:
         }
     return learned
 
-
 def get_learned_threshold(
     thresholds: dict[str, dict[str, Any]],
     word_norm: str,
@@ -239,12 +228,10 @@ def get_learned_threshold(
     ctx_key = threshold_key(word_norm, paragraph_id, token_index)
     return thresholds.get(ctx_key) or thresholds.get(threshold_key(word_norm))
 
-
 def recording_id_hst() -> tuple[str, str]:
     """Build a microsecond recording id and ISO timestamp in HST."""
     now_hst = datetime.now(HST_TZ)
     return now_hst.strftime("%y%m%d%H%M%S%f"), now_hst.isoformat(timespec="microseconds")
-
 
 def persist_submission(
     *,
@@ -261,7 +248,6 @@ def persist_submission(
     os.makedirs(BUCKET_DIR, exist_ok=True)
     wav_path = os.path.join(BUCKET_DIR, f"{recording_id}.wav")
     json_path = os.path.join(BUCKET_DIR, f"{recording_id}.json")
-    tmp_json_path = f"{json_path}.tmp"
 
     paragraph_text = paragraph.get("display_text", "")
     paragraph_hash = hashlib.sha256(paragraph_text.encode("utf-8")).hexdigest() if paragraph_text else None
@@ -321,22 +307,18 @@ def persist_submission(
 
     sidecar_json = json.dumps(sidecar, ensure_ascii=False, indent=2) + "\n"
 
-    def write_wav_file() -> None:
+    def write_files() -> None:
+        with open(json_path, "w", encoding="utf-8") as jf:
+            jf.write(sidecar_json)
+            jf.flush()
+            os.fsync(jf.fileno())
         with open(wav_path, "wb") as wf:
             wf.write(wav_bytes)
             wf.flush()
             os.fsync(wf.fileno())
 
-    def write_sidecar_file() -> None:
-        with open(tmp_json_path, "w", encoding="utf-8") as jf:
-            jf.write(sidecar_json)
-            jf.flush()
-            os.fsync(jf.fileno())
-        os.replace(tmp_json_path, json_path)
-
     write_start = time.perf_counter()
-    PERSIST_EXECUTOR.submit(write_wav_file)
-    PERSIST_EXECUTOR.submit(write_sidecar_file)
+    PERSIST_EXECUTOR.submit(write_files)
     track_timing("persist_output_files_sec", time.perf_counter() - write_start)
 
     return {
@@ -344,7 +326,6 @@ def persist_submission(
         "wav_path": wav_path,
         "json_path": json_path,
     }
-
 
 def parse_paragraphs(text: str) -> list[dict[str, Any]]:
     """Parse paragraphs and extract target annotations like word[N]/word[V]."""
@@ -380,11 +361,9 @@ def parse_paragraphs(text: str) -> list[dict[str, Any]]:
         })
     return paragraphs
 
-
 # Load canonical practice paragraphs once at import-time for consistent ids/targets.
 with open("PARAGRAPHS.txt", "r", encoding="utf-8") as f:
     PARAGRAPHS = parse_paragraphs(f.read())
-
 
 def load_pronunciations() -> dict[str, list[list[str]]]:
     """Load CMUdict pronunciations for only target words in test paragraphs."""
@@ -408,10 +387,8 @@ def load_pronunciations() -> dict[str, list[list[str]]]:
                 pronunciations[w] = variants
     return pronunciations
 
-
 # Build a compact pronunciation inventory only for target words in configured paragraphs.
 PRONUNCIATIONS = load_pronunciations()
-
 
 @dataclass
 class WavData:
@@ -421,7 +398,6 @@ class WavData:
     sample_width: int
     pcm_bytes: bytes
 
-
 def read_wav_bytes(wav_bytes: bytes) -> WavData:
     """Decode WAV bytes and return audio properties plus raw PCM frames."""
     with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
@@ -430,7 +406,6 @@ def read_wav_bytes(wav_bytes: bytes) -> WavData:
         sw = wf.getsampwidth()
         pcm = wf.readframes(wf.getnframes())
     return WavData(sample_rate=sr, channels=channels, sample_width=sw, pcm_bytes=pcm)
-
 
 def resolve_deepgram_api_key(explicit_key: str | None = None) -> str:
     """Resolve Deepgram key source with precedence: explicit, cookie, env."""
@@ -451,7 +426,6 @@ def resolve_deepgram_api_key(explicit_key: str | None = None) -> str:
         return DEEPGRAM_API_KEY.strip()
 
     raise RuntimeError("No Deepgram API key provided (cookie, A2A param, or DEEPGRAM_API_KEY env)")
-
 
 def deepgram_transcribe(wav_bytes: bytes, deepgram_api_key: str | None = None) -> list[dict[str, Any]]:
     """Submit WAV to Deepgram and return flattened per-word metadata."""
@@ -511,7 +485,6 @@ def deepgram_transcribe(wav_bytes: bytes, deepgram_api_key: str | None = None) -
         )
     return flat
 
-
 def needleman_wunsch_alignment(ref_tokens: list[str], hyp_tokens: list[str]) -> dict[int, int]:
     """Globally align reference/hypothesis tokens and return exact-match mapping."""
     n, m = len(ref_tokens), len(hyp_tokens)
@@ -553,7 +526,6 @@ def needleman_wunsch_alignment(ref_tokens: list[str], hyp_tokens: list[str]) -> 
             j -= 1
     return mapping
 
-
 def ensure_decoder():
     """Lazily initialize and cache the PocketSphinx decoder instance."""
     global DECODER_SINGLETON
@@ -572,7 +544,6 @@ def ensure_decoder():
     )
     return DECODER_SINGLETON
 
-
 def slice_word_pcm(wav_data: WavData, start: float, end: float, total_duration: float) -> bytes:
     """Extract a padded PCM slice for a word-level audio segment."""
     if wav_data.sample_rate != 16000 or wav_data.channels != 1 or wav_data.sample_width != 2:
@@ -584,7 +555,6 @@ def slice_word_pcm(wav_data: WavData, start: float, end: float, total_duration: 
     s_idx = int(pad_start * wav_data.sample_rate)
     e_idx = int(pad_end * wav_data.sample_rate)
     return wav_data.pcm_bytes[s_idx * bps : e_idx * bps]
-
 
 def align_phonemes(word_text: str, pcm_bytes: bytes, start_time: float) -> list[dict[str, Any]]:
     """Run forced alignment for one word and return phone intervals in seconds."""
@@ -610,13 +580,11 @@ def align_phonemes(word_text: str, pcm_bytes: bytes, start_time: float) -> list[
             phones.append({"phone": phone.name, "start": max(0.0, p_start), "end": max(0.0, p_end)})
     return phones
 
-
 def phoneme_match_score(aligned: list[dict[str, Any]], pronunciation: list[str]) -> int:
     """Score phone sequence overlap by position-wise matches."""
     aligned_seq = [re.sub(r"\d", "", p["phone"]) for p in aligned]
     pron_seq = [re.sub(r"\d", "", x) for x in pronunciation]
     return sum(1 for i in range(min(len(aligned_seq), len(pron_seq))) if aligned_seq[i] == pron_seq[i])
-
 
 def infer_stress_from_word(
     word: str,
@@ -727,7 +695,6 @@ def infer_stress_from_word(
         "decision_confidence": decision_confidence,
     }
 
-
 def build_render_words(display_text: str, alignment: dict[int, int], deepgram_words: list[dict[str, Any]], targets: list[dict[str, Any]], target_results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Create UI-ready token metadata while preserving original spacing."""
     target_by_idx = {t["token_index"]: t for t in targets}
@@ -753,7 +720,6 @@ def build_render_words(display_text: str, alignment: dict[int, int], deepgram_wo
         })
         word_i += 1
     return render
-
 
 def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes, deepgram_api_key: str | None = None) -> dict[str, Any]:
     """End-to-end analysis pipeline for a paragraph and uploaded WAV audio."""
@@ -877,9 +843,6 @@ def analyze_payload(paragraph: dict[str, Any], wav_bytes: bytes, deepgram_api_ke
         "timing": timing,
     }
 
-
-
-
 def get_client_ip() -> str | None:
     """Resolve client IP from Cloud Run proxy headers when available."""
     forwarded_for = request.headers.get("X-Forwarded-For", "").strip()
@@ -892,7 +855,6 @@ def get_request_id() -> str:
     header = request.headers.get("X-Request-Id", "").strip()
     return header or str(uuid.uuid4())
 
-
 @app.before_request
 def attach_request_id() -> None:
     """Attach request context fields to flask.g before request handling."""
@@ -900,49 +862,41 @@ def attach_request_id() -> None:
     g.client_ip = get_client_ip()
     g.timings = {}
 
-
 @app.after_request
 def add_request_id_header(resp: Response) -> Response:
     """Mirror server request id in response headers for client correlation."""
     resp.headers["X-Request-Id"] = g.request_id
     return resp
 
-
 @app.route("/")
 def index() -> str:
     """Serve the web UI."""
     return render_template("index.html", base_url=request.host_url.rstrip("/"))
-
 
 @app.route("/api/paragraphs")
 def api_paragraphs():
     """Return all parsed practice paragraphs with target metadata."""
     return jsonify({"request_id": g.request_id, "paragraphs": PARAGRAPHS})
 
-
 def health_payload() -> dict[str, str]:
     """Return a standard health payload."""
     return {"request_id": g.request_id, "status": "ok"}
-
 
 @app.route("/healthz")
 def healthz():
     """Lightweight health-check endpoint."""
     return jsonify(health_payload())
 
-
 @app.route("/api/healthz")
 def api_healthz():
     """Alias health endpoint under /api for proxy/path-router compatibility."""
     return jsonify(health_payload())
-
 
 @app.route("/robots.txt")
 def robots_txt() -> Response:
     """Serve a fully permissive robots policy for all crawlers."""
     body = "User-agent: *\nAllow: /\n"
     return Response(body, mimetype="text/plain")
-
 
 def agent_card_payload() -> dict[str, Any]:
     """Build static-ish A2A agent capability metadata."""
@@ -985,14 +939,12 @@ def agent_card_payload() -> dict[str, Any]:
         "defaultOutputModes": ["application/json"],
     }
 
-
 @app.route("/.well-known/agent.json")
 def agent_card():
     """Expose A2A agent-card metadata at the well-known endpoint."""
     card = agent_card_payload()
     card["request_id"] = g.request_id
     return jsonify(card)
-
 
 @app.route("/api/analyze", methods=["POST"])
 def api_analyze():
@@ -1037,7 +989,6 @@ def api_analyze():
     except Exception as exc:
         log(f"analyze failed: {exc}")
         return jsonify({"request_id": g.request_id, "error": str(exc)}), 500
-
 
 @app.route("/a2a", methods=["POST"])
 def a2a():
@@ -1139,7 +1090,6 @@ def a2a():
             return rpc_err(-32000, str(exc), status=500)
 
     return rpc_err(-32601, "Method not found", status=404)
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080, debug=True)
