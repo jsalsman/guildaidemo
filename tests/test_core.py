@@ -1,5 +1,6 @@
 import base64
 import json
+import time
 from pathlib import Path
 
 from app import (
@@ -143,6 +144,10 @@ def test_api_analyze_persists_hst_sidecar_and_wav_for_paragraph3_fixture(monkeyp
 
     stored_wav = Path(persistence["wav_path"])
     stored_json = Path(persistence["json_path"])
+    deadline = time.time() + 3.0
+    while time.time() < deadline and (not stored_wav.exists() or not stored_json.exists()):
+        time.sleep(0.01)
+
     assert stored_wav.read_bytes() == wav_bytes
 
     sidecar = json.loads(stored_json.read_text(encoding="utf-8"))
