@@ -7,4 +7,3 @@ rjsmin
 gunicorn
 gevent
 pytest
-aiofiles
