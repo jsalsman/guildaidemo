@@ -6,6 +6,7 @@ or syllable 2 for each target.
 """
 
 import base64, glob, hashlib, io, json, math, os, re, statistics, sys, time, uuid, wave
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -51,6 +52,9 @@ app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
 # Lazy-initialized PocketSphinx decoder singleton.
 DECODER_SINGLETON = None
+# Background I/O pool used to write persisted WAV/sidecar artifacts off the
+# request thread so API responses are not blocked on bucket FUSE latency.
+PERSIST_EXECUTOR = ThreadPoolExecutor(max_workers=int(os.environ.get("PERSIST_WORKERS", "4")))
 
 
 class DeepgramAPIError(RuntimeError):
@@ -258,12 +262,6 @@ def persist_submission(
     json_path = os.path.join(BUCKET_DIR, f"{recording_id}.json")
     tmp_json_path = f"{json_path}.tmp"
 
-    write_start = time.perf_counter()
-    with open(wav_path, "wb") as wf:
-        wf.write(wav_bytes)
-        wf.flush()
-        os.fsync(wf.fileno())
-
     paragraph_text = paragraph.get("display_text", "")
     paragraph_hash = hashlib.sha256(paragraph_text.encode("utf-8")).hexdigest() if paragraph_text else None
     targets = []
@@ -320,12 +318,24 @@ def persist_submission(
         },
     }
 
-    with open(tmp_json_path, "w", encoding="utf-8") as jf:
-        json.dump(sidecar, jf, ensure_ascii=False, indent=2)
-        jf.write("\n")
-        jf.flush()
-        os.fsync(jf.fileno())
-    os.replace(tmp_json_path, json_path)
+    sidecar_json = json.dumps(sidecar, ensure_ascii=False, indent=2) + "\n"
+
+    def write_wav_file() -> None:
+        with open(wav_path, "wb") as wf:
+            wf.write(wav_bytes)
+            wf.flush()
+            os.fsync(wf.fileno())
+
+    def write_sidecar_file() -> None:
+        with open(tmp_json_path, "w", encoding="utf-8") as jf:
+            jf.write(sidecar_json)
+            jf.flush()
+            os.fsync(jf.fileno())
+        os.replace(tmp_json_path, json_path)
+
+    write_start = time.perf_counter()
+    PERSIST_EXECUTOR.submit(write_wav_file)
+    PERSIST_EXECUTOR.submit(write_sidecar_file)
     track_timing("persist_output_files_sec", time.perf_counter() - write_start)
 
     return {
