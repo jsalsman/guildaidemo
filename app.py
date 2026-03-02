@@ -5,8 +5,7 @@ output and phone-level timing to infer whether stress was placed on syllable 1
 or syllable 2 for each target.
 """
 
-import base64, glob, hashlib, io, json, math, os, re, statistics, sys, time, uuid, wave
-from concurrent.futures import ThreadPoolExecutor
+import base64, glob, hashlib, io, json, math, os, re, shlex, statistics, sys, tempfile, time, uuid, wave
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -51,10 +50,6 @@ app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024
 
 # Lazy-initialized PocketSphinx decoder singleton.
 DECODER_SINGLETON = None
-
-# Background I/O pool used to write persisted WAV/sidecar artifacts off the
-# request thread so API responses are not blocked on bucket FUSE latency.
-PERSIST_EXECUTOR = ThreadPoolExecutor(max_workers=int(os.environ.get("PERSIST_WORKERS", "4")))
 
 class DeepgramAPIError(RuntimeError):
     """Friendly, client-safe wrapper for upstream Deepgram API failures."""
@@ -306,19 +301,30 @@ def persist_submission(
 
     sidecar_json = json.dumps(sidecar, ensure_ascii=False, indent=2) + "\n"
 
-    def write_files() -> None:
-        with open(json_path, "w", encoding="utf-8") as jf:
-            jf.write(sidecar_json)
-            jf.flush()
-            os.fsync(jf.fileno())
-        with open(wav_path, "wb") as wf:
-            wf.write(wav_bytes)
-            wf.flush()
-            os.fsync(wf.fileno())
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as jf:
+        json_tmp_path = jf.name
+    with tempfile.NamedTemporaryFile("wb", delete=False) as wf:
+        wav_tmp_path = wf.name
 
-    write_start = time.perf_counter()
-    PERSIST_EXECUTOR.submit(write_files)
-    track_timing("persist_output_files_sec", time.perf_counter() - write_start)
+    local_write_start = time.perf_counter()
+    with open(json_tmp_path, "w", encoding="utf-8") as jf:
+        jf.write(sidecar_json)
+        jf.flush()
+        os.fsync(jf.fileno())
+    with open(wav_tmp_path, "wb") as wf:
+        wf.write(wav_bytes)
+        wf.flush()
+        os.fsync(wf.fileno())
+    track_timing("persist_local_write_fsync_sec", time.perf_counter() - local_write_start)
+
+    move_start = time.perf_counter()
+    move_cmd = (
+        f"mv {shlex.quote(json_tmp_path)} {shlex.quote(json_path)}"
+        f" & mv {shlex.quote(wav_tmp_path)} {shlex.quote(wav_path)} &"
+    )
+    os.system(move_cmd)
+    track_timing("persist_system_mv_sec", time.perf_counter() - move_start)
+    track_timing("persist_output_files_sec", time.perf_counter() - local_write_start)
 
     return {
         "recording_id": recording_id,
