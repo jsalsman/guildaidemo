@@ -9,13 +9,12 @@ import base64, glob, hashlib, io, json, math, os, re, statistics, sys, time, uui
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
-from zoneinfo import ZoneInfo
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import cmudict
-import aiofiles
-import requests
 from flask import Flask, Response, g, has_request_context, jsonify, render_template, request
+import requests  # for Deepfram API
 
 # Shared fallback Deepgram API key used for outbound ASR requests.
 DEEPGRAM_API_KEY = os.environ.get("DEEPGRAM_API_KEY")
