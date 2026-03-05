@@ -104,7 +104,7 @@
     "deepgram_api_key": "dg_live_xxx"
   }
 }</pre>
-      <h3>Example response (truncated)</h3>
+      <h3>Example response</h3>
       <p>This sample shows the structure you receive after a successful <code>pronunciation.evaluate</code> call. The <code>analysis</code> block contains transcription confidence, token alignment, per-target status, and aggregate scoring, while <code>persistence</code> contains generated IDs and output file locations. Use this shape to map results into UI components and interpret success by checking both the summary score and individual target statuses.</p>
       <pre class="no-copy">{
   "jsonrpc": "2.0",
@@ -126,8 +126,8 @@
         {
           "word": "record",
           "pos": "verb",
-          "expected": "re-CORD",
-          "inferred": "re-CORD",
+          "expected_stress": 2,
+          "inferred_stress": 2,
           "status": "ok",
           "feedback": "Verb stress is correct.",
           "decision_method": "learned_threshold",
@@ -139,10 +139,11 @@
         {
           "word": "project",
           "pos": "noun",
-          "expected": "PRO-ject",
-          "inferred": "pro-JECT",
+          "expected_stress": 1,
+          "inferred_stress": 2,
           "status": "needs_work",
-          "feedback": "Noun should stress the first syllable."
+          "feedback": "Noun should stress the first syllable.",
+          "decision_method": "naive_duration"
         }
       ],
       "score_summary": {
